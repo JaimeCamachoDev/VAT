@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -132,8 +133,9 @@ namespace JaimeCamacho.VAT.Editor
                                 ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
                             }
 
-                            break;
-                        }
+                    if (!assigned)
+                    {
+                        ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
                     }
                 }
 
@@ -141,18 +143,174 @@ namespace JaimeCamacho.VAT.Editor
             }
         }
 
-        private string ConvertToProjectRelativePath(string absolutePath)
+        private bool TryAssignOutputPathFromPaths(IEnumerable<string> paths)
         {
-            absolutePath = absolutePath.Replace('\\', '/');
-            string dataPath = Application.dataPath.Replace('\\', '/');
+            if (paths == null)
+            {
+                return false;
+            }
 
-            if (!absolutePath.StartsWith(dataPath))
+            foreach (string path in paths)
+            {
+                if (TryAssignOutputPath(path))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryAssignOutputPathFromObjectReferences(UnityEngine.Object[] objectReferences)
+        {
+            if (objectReferences == null)
+            {
+                return false;
+            }
+
+            foreach (UnityEngine.Object reference in objectReferences)
+            {
+                if (reference == null)
+                {
+                    continue;
+                }
+
+                string assetPath = AssetDatabase.GetAssetPath(reference);
+                if (string.IsNullOrEmpty(assetPath))
+                {
+                    continue;
+                }
+
+                if (TryAssignOutputPath(assetPath))
+                {
+                    return true;
+                }
+
+                string directory = Path.GetDirectoryName(assetPath);
+                if (TryAssignOutputPath(directory))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryAssignOutputPath(string rawPath)
+        {
+            string projectRelativePath = ConvertToProjectRelativePath(rawPath);
+            if (string.IsNullOrEmpty(projectRelativePath))
+            {
+                return false;
+            }
+
+            if (!IsProjectRelativeFolder(projectRelativePath))
+            {
+                return false;
+            }
+
+            if (outputPath != projectRelativePath)
+            {
+                outputPath = projectRelativePath;
+                Repaint();
+            }
+
+            return true;
+        }
+
+        private bool IsProjectRelativeFolder(string projectRelativePath)
+        {
+            if (AssetDatabase.IsValidFolder(projectRelativePath))
+            {
+                return true;
+            }
+
+            string projectRoot = Path.GetDirectoryName(Application.dataPath);
+            if (string.IsNullOrEmpty(projectRoot))
+            {
+                return false;
+            }
+
+            string absolutePath = Path.Combine(projectRoot, projectRelativePath);
+            if (string.IsNullOrEmpty(absolutePath))
+            {
+                return false;
+            }
+
+            if (File.Exists(absolutePath))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private string ConvertToProjectRelativePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
             {
                 return string.Empty;
             }
 
-            string relativePath = "Assets" + absolutePath.Substring(dataPath.Length);
-            return relativePath.TrimEnd('/');
+            string normalizedPath = path.Replace('\\', '/').Trim();
+            if (normalizedPath.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            if (normalizedPath.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return NormalizeProjectRelativePath(normalizedPath);
+            }
+
+            string dataPath = Application.dataPath.Replace('\\', '/');
+            if (normalizedPath.StartsWith(dataPath, StringComparison.OrdinalIgnoreCase))
+            {
+                string relativePath = "Assets" + normalizedPath.Substring(dataPath.Length);
+                return NormalizeProjectRelativePath(relativePath);
+            }
+
+            return string.Empty;
+        }
+
+        private static string NormalizeProjectRelativePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return string.Empty;
+            }
+
+            string sanitizedPath = path.Replace('\\', '/').Trim();
+            if (sanitizedPath.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            string[] segments = sanitizedPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            if (!segments[0].Equals("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            for (int i = 1; i < segments.Length; i++)
+            {
+                if (segments[i] == "." || segments[i] == "..")
+                {
+                    return string.Empty;
+                }
+            }
+
+            if (segments.Length == 1)
+            {
+                return "Assets";
+            }
+
+            return "Assets/" + string.Join("/", segments, 1, segments.Length - 1);
         }
 
         private void BakeVatPositionTextures()
