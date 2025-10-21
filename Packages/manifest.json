@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.jaimecamacho.discovernotes": "1.2.0",
     "com.jaimecamacho.packagecreator": "1.0.2",
     "com.jaimecamacho.unityfolders": "1.2.4",
     "com.unity.feature.characters-animation": "1.0.0",
