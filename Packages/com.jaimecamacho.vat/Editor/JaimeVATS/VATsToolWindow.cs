@@ -118,7 +118,20 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     DragAndDrop.AcceptDrag();
 
-                    bool assigned = TryAssignOutputPathFromPaths(DragAndDrop.paths) || TryAssignOutputPathFromObjectReferences(DragAndDrop.objectReferences);
+                    foreach (string draggedPath in DragAndDrop.paths)
+                    {
+                        if (Directory.Exists(draggedPath))
+                        {
+                            string projectRelativePath = ConvertToProjectRelativePath(draggedPath);
+                            if (!string.IsNullOrEmpty(projectRelativePath))
+                            {
+                                outputPath = projectRelativePath;
+                                Repaint();
+                            }
+                            else
+                            {
+                                ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
+                            }
 
                     if (!assigned)
                     {
