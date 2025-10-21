@@ -21,7 +21,7 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: VATS_VAT
-  m_Shader: {fileID: -6465566751694194690, guid: 2c843f0552c084244a2426edd573427a, type: 3}
+  m_Shader: {fileID: -6465566751694194690, guid: 1a4957032ff515a489efc66d64f9c485, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
