@@ -21,6 +21,40 @@ namespace JaimeCamacho.VAT.Editor
         private string statusMessage = string.Empty;
         private MessageType statusMessageType = MessageType.Info;
 
+        private const string k_PaintRootName = "VATPaintRoot";
+        private static readonly Color k_BrushFillColor = new Color(0f, 0.5f, 1f, 0.25f);
+        private static readonly Color k_BrushOutlineColor = Color.cyan;
+
+        [Serializable]
+        private class PaintGroup
+        {
+            public string groupName = "New Group";
+            public string id;
+            public List<MeshFilter> meshFilters = new List<MeshFilter>();
+            public List<Material> vatMaterials = new List<Material>();
+            public bool isExpanded = true;
+
+            public PaintGroup()
+            {
+                id = Guid.NewGuid().ToString("N");
+            }
+        }
+
+        private readonly List<PaintGroup> paintGroups = new List<PaintGroup>();
+        private readonly Dictionary<PaintGroup, List<Transform>> paintGroupParents = new Dictionary<PaintGroup, List<Transform>>();
+        private readonly List<PaintGroup> reusablePaintGroups = new List<PaintGroup>();
+        private readonly List<int> reusableMeshFilterIndices = new List<int>();
+        private readonly List<int> reusableMaterialIndices = new List<int>();
+
+        private Transform painterFocusTarget;
+        private GameObject painterSurface;
+        private MeshCollider painterSurfaceCollider;
+        private bool painterPaintingMode;
+        private GameObject painterRoot;
+        private float painterBrushRadius = 2f;
+        private int painterBrushDensity = 5;
+        private float painterMinDistance = 0.5f;
+
         [MenuItem("Tools/JaimeCamachoDev/VATsTool")]
         [MenuItem("Assets/JaimeCamachoDev/VATsTool")]
         public static void ShowWindow()
@@ -39,11 +73,22 @@ namespace JaimeCamacho.VAT.Editor
             TryAssignDefaultComputeShader();
         }
 
+        private void OnDisable()
+        {
+            if (painterPaintingMode)
+            {
+                TogglePaintingMode(false);
+            }
+        }
+
         private void OnGUI()
         {
             scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
             DrawVatBakerSection();
+
+            EditorGUILayout.Space(12f);
+            DrawVatPainterSection();
 
             EditorGUILayout.EndScrollView();
         }
@@ -100,6 +145,824 @@ namespace JaimeCamacho.VAT.Editor
                 EditorGUILayout.Space();
                 EditorGUILayout.HelpBox(statusMessage, statusMessageType);
             }
+
+        private void DrawVatPainterSection()
+        {
+            EditorGUILayout.LabelField("VAT Painter", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("Paint VAT-ready prefabs on top of a surface using groups of meshes and VAT materials.", MessageType.Info);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Add Paint Group"))
+                {
+                    paintGroups.Add(new PaintGroup { groupName = GenerateUniqueGroupName() });
+                    InvalidatePainterHierarchy();
+                }
+
+                using (new EditorGUI.DisabledScope(GetPaintRoot(false) == null))
+                {
+                    if (GUILayout.Button("Clear Painted Instances"))
+                    {
+                        ClearPaintedInstances();
+                    }
+                }
+            }
+
+            EditorGUILayout.Space();
+
+            for (int i = 0; i < paintGroups.Count; i++)
+            {
+                if (DrawPaintGroup(paintGroups[i], i))
+                {
+                    i--;
+                }
+            }
+
+            if (paintGroups.Count == 0)
+            {
+                EditorGUILayout.HelpBox("No paint groups defined yet. Add one to start painting VAT characters.", MessageType.Info);
+            }
+
+            EditorGUILayout.Space();
+
+            painterFocusTarget = (Transform)EditorGUILayout.ObjectField("Focus Target", painterFocusTarget, typeof(Transform), true);
+
+            GameObject newSurface = (GameObject)EditorGUILayout.ObjectField("Paint Surface", painterSurface, typeof(GameObject), true);
+            if (newSurface != painterSurface)
+            {
+                painterSurface = newSurface;
+                UpdatePaintSurfaceCollider();
+            }
+
+            painterBrushRadius = EditorGUILayout.Slider("Brush Radius", painterBrushRadius, 0.05f, 25f);
+            painterBrushDensity = EditorGUILayout.IntSlider("Brush Density", painterBrushDensity, 1, 64);
+            painterMinDistance = EditorGUILayout.Slider("Min Distance Between Instances", painterMinDistance, 0f, 10f);
+
+            DrawPainterDiagnostics();
+
+            bool requestedMode = GUILayout.Toggle(painterPaintingMode, "Enable Painting Mode", "Button");
+            if (requestedMode != painterPaintingMode)
+            {
+                TogglePaintingMode(requestedMode);
+            }
+
+            if (painterPaintingMode)
+            {
+                EditorGUILayout.HelpBox("Left-click in the Scene view to paint VAT instances. Hold Alt to keep navigating the camera.", MessageType.Info);
+            }
+        }
+
+        private string GenerateUniqueGroupName()
+        {
+            const string baseName = "Paint Group";
+            int index = paintGroups.Count + 1;
+
+            while (true)
+            {
+                string candidate = $"{baseName} {index}";
+                bool exists = false;
+
+                foreach (PaintGroup group in paintGroups)
+                {
+                    if (string.Equals(group.groupName, candidate, StringComparison.OrdinalIgnoreCase))
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+
+                if (!exists)
+                {
+                    return candidate;
+                }
+
+                index++;
+            }
+        }
+
+        private bool DrawPaintGroup(PaintGroup group, int index)
+        {
+            bool removeGroup = false;
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            EditorGUILayout.BeginHorizontal();
+            group.isExpanded = EditorGUILayout.Foldout(group.isExpanded, group.groupName, true);
+            if (GUILayout.Button("Remove", GUILayout.Width(70f)))
+            {
+                removeGroup = true;
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (group.isExpanded)
+            {
+                EditorGUI.indentLevel++;
+
+                string newName = EditorGUILayout.TextField("Group Name", group.groupName);
+                if (!string.Equals(newName, group.groupName, StringComparison.Ordinal))
+                {
+                    group.groupName = newName;
+                    InvalidatePainterHierarchy(group);
+                }
+
+                DrawMeshFilterList(group);
+                DrawMaterialList(group);
+
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.EndVertical();
+
+            if (removeGroup)
+            {
+                InvalidatePainterHierarchy(group);
+                paintGroupParents.Remove(group);
+                paintGroups.RemoveAt(index);
+                return true;
+            }
+
+            return false;
+        }
+
+        private void DrawMeshFilterList(PaintGroup group)
+        {
+            EditorGUILayout.LabelField("Mesh Filters", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            for (int i = 0; i < group.meshFilters.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                group.meshFilters[i] = (MeshFilter)EditorGUILayout.ObjectField(group.meshFilters[i], typeof(MeshFilter), true);
+                if (GUILayout.Button("X", GUILayout.Width(24f)))
+                {
+                    group.meshFilters.RemoveAt(i);
+                    i--;
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Add Mesh Filter"))
+                {
+                    group.meshFilters.Add(null);
+                }
+
+                if (GUILayout.Button("Add Selected"))
+                {
+                    AddSelectedMeshFilters(group);
+                }
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawMaterialList(PaintGroup group)
+        {
+            EditorGUILayout.LabelField("VAT Materials", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            for (int i = 0; i < group.vatMaterials.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                group.vatMaterials[i] = (Material)EditorGUILayout.ObjectField(group.vatMaterials[i], typeof(Material), false);
+                if (GUILayout.Button("X", GUILayout.Width(24f)))
+                {
+                    group.vatMaterials.RemoveAt(i);
+                    i--;
+                    InvalidatePainterHierarchy(group);
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Add Material"))
+                {
+                    group.vatMaterials.Add(null);
+                    InvalidatePainterHierarchy(group);
+                }
+
+                if (GUILayout.Button("Add Selected"))
+                {
+                    if (AddSelectedMaterials(group))
+                    {
+                        InvalidatePainterHierarchy(group);
+                    }
+                }
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        private void AddSelectedMeshFilters(PaintGroup group)
+        {
+            GameObject[] selectedObjects = Selection.gameObjects;
+            bool added = false;
+
+            foreach (GameObject go in selectedObjects)
+            {
+                if (go == null)
+                {
+                    continue;
+                }
+
+                MeshFilter filter = go.GetComponent<MeshFilter>();
+                if (filter != null && !group.meshFilters.Contains(filter))
+                {
+                    group.meshFilters.Add(filter);
+                    added = true;
+                }
+            }
+
+            if (added)
+            {
+                Repaint();
+            }
+        }
+
+        private bool AddSelectedMaterials(PaintGroup group)
+        {
+            bool added = false;
+
+            foreach (UnityEngine.Object obj in Selection.objects)
+            {
+                if (obj is Material material && !group.vatMaterials.Contains(material))
+                {
+                    group.vatMaterials.Add(material);
+                    added = true;
+                }
+            }
+
+            if (!added)
+            {
+                foreach (GameObject go in Selection.gameObjects)
+                {
+                    if (go == null)
+                    {
+                        continue;
+                    }
+
+                    Renderer renderer = go.GetComponent<Renderer>();
+                    if (renderer == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (Material shared in renderer.sharedMaterials)
+                    {
+                        if (shared != null && !group.vatMaterials.Contains(shared))
+                        {
+                            group.vatMaterials.Add(shared);
+                            added = true;
+                        }
+                    }
+                }
+            }
+
+            if (added)
+            {
+                Repaint();
+            }
+
+            return added;
+        }
+
+        private void DrawPainterDiagnostics()
+        {
+            if (painterSurface == null)
+            {
+                EditorGUILayout.HelpBox("Assign a Paint Surface with a MeshCollider to receive brush strokes.", MessageType.Info);
+            }
+            else if (painterSurfaceCollider == null)
+            {
+                EditorGUILayout.HelpBox("The selected Paint Surface does not contain a MeshCollider component.", MessageType.Warning);
+            }
+
+            if (!HasAnyValidPaintGroup())
+            {
+                EditorGUILayout.HelpBox("Create at least one paint group with valid mesh filters and VAT materials to start painting.", MessageType.Warning);
+            }
+
+            if (painterFocusTarget == null)
+            {
+                EditorGUILayout.HelpBox("Assign a Focus Target to orient painted instances. Without it, instances keep their original forward direction.", MessageType.Info);
+            }
+        }
+
+        private void InvalidatePainterHierarchy(PaintGroup group = null)
+        {
+            if (group == null)
+            {
+                paintGroupParents.Clear();
+                return;
+            }
+
+            paintGroupParents.Remove(group);
+        }
+
+        private void UpdatePaintSurfaceCollider()
+        {
+            painterSurfaceCollider = painterSurface != null ? painterSurface.GetComponent<MeshCollider>() : null;
+        }
+
+        private GameObject GetPaintRoot(bool createIfMissing)
+        {
+            if (painterRoot != null)
+            {
+                return painterRoot;
+            }
+
+            painterRoot = GameObject.Find(k_PaintRootName);
+            if (painterRoot == null && createIfMissing)
+            {
+                painterRoot = new GameObject(k_PaintRootName);
+                Undo.RegisterCreatedObjectUndo(painterRoot, "Create VAT Paint Root");
+            }
+
+            return painterRoot;
+        }
+
+        private void ClearPaintedInstances()
+        {
+            GameObject root = GetPaintRoot(false);
+            if (root == null)
+            {
+                return;
+            }
+
+            Undo.DestroyObjectImmediate(root);
+            painterRoot = null;
+            paintGroupParents.Clear();
+        }
+
+        private void TogglePaintingMode(bool enable)
+        {
+            if (painterPaintingMode == enable)
+            {
+                return;
+            }
+
+            painterPaintingMode = enable;
+
+            if (enable)
+            {
+                UpdatePaintSurfaceCollider();
+                SceneView.duringSceneGui += HandlePainterSceneGUI;
+            }
+            else
+            {
+                SceneView.duringSceneGui -= HandlePainterSceneGUI;
+                painterRoot = null;
+                paintGroupParents.Clear();
+            }
+
+            SceneView.RepaintAll();
+        }
+
+        private bool PainterHasValidSetup()
+        {
+            return painterSurfaceCollider != null && HasAnyValidPaintGroup();
+        }
+
+        private void HandlePainterSceneGUI(SceneView sceneView)
+        {
+            if (!painterPaintingMode)
+            {
+                return;
+            }
+
+            Event current = Event.current;
+            if (current == null)
+            {
+                return;
+            }
+
+            if (current.type == EventType.Layout)
+            {
+                HandleUtility.AddDefaultControl(GUIUtility.GetControlID(FocusType.Passive));
+            }
+
+            if (!PainterHasValidSetup())
+            {
+                return;
+            }
+
+            Ray guiRay = HandleUtility.GUIPointToWorldRay(current.mousePosition);
+            if (!TryGetPaintHit(guiRay, out RaycastHit hit))
+            {
+                return;
+            }
+
+            DrawBrushPreview(hit);
+
+            if (current.alt)
+            {
+                return;
+            }
+
+            bool shouldPaint = (current.type == EventType.MouseDown || current.type == EventType.MouseDrag) && current.button == 0;
+            if (shouldPaint && PaintAtRayHit(hit))
+            {
+                current.Use();
+            }
+        }
+
+        private bool TryGetPaintHit(Ray ray, out RaycastHit hit)
+        {
+            if (painterSurfaceCollider != null)
+            {
+                return painterSurfaceCollider.Raycast(ray, out hit, 10000f);
+            }
+
+            hit = default;
+            return false;
+        }
+
+        private void DrawBrushPreview(RaycastHit hit)
+        {
+            Handles.zTest = UnityEngine.Rendering.CompareFunction.LessEqual;
+            Handles.color = k_BrushFillColor;
+            Handles.DrawSolidDisc(hit.point, hit.normal, painterBrushRadius);
+            Handles.color = k_BrushOutlineColor;
+            Handles.DrawWireDisc(hit.point, hit.normal, painterBrushRadius);
+        }
+
+        private static void BuildBrushFrame(Vector3 normal, out Vector3 tangent, out Vector3 bitangent)
+        {
+            tangent = Vector3.Cross(normal, Vector3.up);
+            if (tangent.sqrMagnitude < 1e-6f)
+            {
+                tangent = Vector3.Cross(normal, Vector3.right);
+            }
+
+            tangent.Normalize();
+            bitangent = Vector3.Cross(normal, tangent).normalized;
+        }
+
+        private bool PaintAtRayHit(RaycastHit hit)
+        {
+            bool paintedAny = false;
+
+            BuildBrushFrame(hit.normal, out Vector3 tangent, out Vector3 bitangent);
+
+            for (int i = 0; i < painterBrushDensity; i++)
+            {
+                Vector2 offset = UnityEngine.Random.insideUnitCircle * painterBrushRadius;
+                Vector3 samplePoint = hit.point + tangent * offset.x + bitangent * offset.y;
+                Ray offsetRay = new Ray(samplePoint + hit.normal * 0.5f, -hit.normal);
+
+                if (!TryGetPaintHit(offsetRay, out RaycastHit offsetHit))
+                {
+                    continue;
+                }
+
+                if (painterMinDistance > 0f && IsTooClose(offsetHit.point))
+                {
+                    continue;
+                }
+
+                if (PaintInstanceAt(offsetHit.point, offsetHit.normal))
+                {
+                    paintedAny = true;
+                }
+            }
+
+            if (paintedAny)
+            {
+                SceneView.RepaintAll();
+            }
+
+            return paintedAny;
+        }
+
+        private bool PaintInstanceAt(Vector3 position, Vector3 normal)
+        {
+            PaintGroup group = GetRandomValidGroup();
+            if (group == null)
+            {
+                return false;
+            }
+
+            MeshFilter meshFilter = GetRandomMeshFilter(group);
+            if (meshFilter == null)
+            {
+                return false;
+            }
+
+            Material material = GetRandomMaterial(group, out int materialIndex);
+            if (material == null)
+            {
+                return false;
+            }
+
+            GameObject instance = CreateInstanceFromSource(meshFilter.gameObject);
+            if (instance == null)
+            {
+                return false;
+            }
+
+            Undo.RegisterCreatedObjectUndo(instance, "Paint VAT Instance");
+            instance.transform.position = position;
+
+            AlignPaintedInstance(instance.transform, position, normal);
+
+            MeshRenderer renderer = instance.GetComponent<MeshRenderer>();
+            if (renderer != null)
+            {
+                Undo.RecordObject(renderer, "Assign VAT Material");
+                renderer.sharedMaterial = material;
+            }
+
+            Transform parent = GetOrCreateGroupParent(group, materialIndex);
+            if (parent != null)
+            {
+                Undo.SetTransformParent(instance.transform, parent, "Assign Paint Parent");
+                instance.transform.position = position;
+            }
+
+            return true;
+        }
+
+        private PaintGroup GetRandomValidGroup()
+        {
+            reusablePaintGroups.Clear();
+
+            foreach (PaintGroup group in paintGroups)
+            {
+                if (GroupHasValidMesh(group) && GroupHasValidMaterial(group))
+                {
+                    reusablePaintGroups.Add(group);
+                }
+            }
+
+            if (reusablePaintGroups.Count == 0)
+            {
+                return null;
+            }
+
+            int selected = UnityEngine.Random.Range(0, reusablePaintGroups.Count);
+            return reusablePaintGroups[selected];
+        }
+
+        private MeshFilter GetRandomMeshFilter(PaintGroup group)
+        {
+            reusableMeshFilterIndices.Clear();
+
+            for (int i = 0; i < group.meshFilters.Count; i++)
+            {
+                if (group.meshFilters[i] != null)
+                {
+                    reusableMeshFilterIndices.Add(i);
+                }
+            }
+
+            if (reusableMeshFilterIndices.Count == 0)
+            {
+                return null;
+            }
+
+            int selected = reusableMeshFilterIndices[UnityEngine.Random.Range(0, reusableMeshFilterIndices.Count)];
+            return group.meshFilters[selected];
+        }
+
+        private Material GetRandomMaterial(PaintGroup group, out int materialIndex)
+        {
+            reusableMaterialIndices.Clear();
+
+            for (int i = 0; i < group.vatMaterials.Count; i++)
+            {
+                if (group.vatMaterials[i] != null)
+                {
+                    reusableMaterialIndices.Add(i);
+                }
+            }
+
+            if (reusableMaterialIndices.Count == 0)
+            {
+                materialIndex = -1;
+                return null;
+            }
+
+            materialIndex = reusableMaterialIndices[UnityEngine.Random.Range(0, reusableMaterialIndices.Count)];
+            return group.vatMaterials[materialIndex];
+        }
+
+        private GameObject CreateInstanceFromSource(GameObject source)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            GameObject instance = null;
+
+            if (PrefabUtility.IsPartOfPrefabAsset(source))
+            {
+                instance = PrefabUtility.InstantiatePrefab(source) as GameObject;
+            }
+            else if (PrefabUtility.IsPartOfPrefabInstance(source))
+            {
+                GameObject prefabRoot = PrefabUtility.GetCorrespondingObjectFromSource(source);
+                if (prefabRoot != null)
+                {
+                    instance = PrefabUtility.InstantiatePrefab(prefabRoot) as GameObject;
+                }
+            }
+
+            if (instance == null)
+            {
+                instance = UnityEngine.Object.Instantiate(source);
+            }
+
+            if (instance != null)
+            {
+                instance.name = source.name;
+            }
+
+            return instance;
+        }
+
+        private void AlignPaintedInstance(Transform instanceTransform, Vector3 position, Vector3 surfaceNormal)
+        {
+            if (instanceTransform == null)
+            {
+                return;
+            }
+
+            Quaternion rotation = Quaternion.identity;
+
+            if (painterFocusTarget != null)
+            {
+                Bounds bounds = GetFocusTargetBounds();
+                Vector3 lookAtPoint = bounds.ClosestPoint(position);
+                Vector3 direction = lookAtPoint - position;
+                direction.y = 0f;
+
+                if (direction.sqrMagnitude > 1e-4f)
+                {
+                    rotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
+                }
+            }
+
+            if (rotation == Quaternion.identity)
+            {
+                rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+            }
+
+            Quaternion normalAlignment = Quaternion.FromToRotation(Vector3.up, surfaceNormal);
+            instanceTransform.rotation = normalAlignment * rotation;
+        }
+
+        private Bounds GetFocusTargetBounds()
+        {
+            if (painterFocusTarget == null)
+            {
+                return new Bounds(Vector3.zero, Vector3.one);
+            }
+
+            Renderer[] renderers = painterFocusTarget.GetComponentsInChildren<Renderer>();
+            if (renderers.Length > 0)
+            {
+                Bounds combined = renderers[0].bounds;
+                for (int i = 1; i < renderers.Length; i++)
+                {
+                    combined.Encapsulate(renderers[i].bounds);
+                }
+
+                return combined;
+            }
+
+            return new Bounds(painterFocusTarget.position, Vector3.one);
+        }
+
+        private bool IsTooClose(Vector3 point)
+        {
+            GameObject root = GetPaintRoot(false);
+            if (root == null)
+            {
+                return false;
+            }
+
+            foreach (Transform child in root.GetComponentsInChildren<Transform>())
+            {
+                if (child == null || child == root.transform)
+                {
+                    continue;
+                }
+
+                if (child.GetComponent<MeshRenderer>() == null && child.GetComponent<MeshFilter>() == null)
+                {
+                    continue;
+                }
+
+                if (Vector3.Distance(child.position, point) < painterMinDistance)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private Transform GetOrCreateGroupParent(PaintGroup group, int materialIndex)
+        {
+            GameObject root = GetPaintRoot(true);
+            if (root == null)
+            {
+                return null;
+            }
+
+            if (!paintGroupParents.TryGetValue(group, out List<Transform> parents))
+            {
+                parents = new List<Transform>();
+                paintGroupParents[group] = parents;
+            }
+
+            while (parents.Count <= materialIndex)
+            {
+                parents.Add(null);
+            }
+
+            string suffix = $"_{materialIndex + 1}_{group.id}";
+            string baseName = string.IsNullOrWhiteSpace(group.groupName) ? "Group" : group.groupName.Trim();
+            string targetName = $"{baseName}{suffix}";
+
+            Transform parent = parents[materialIndex];
+            if (parent == null)
+            {
+                parent = FindChildBySuffix(root.transform, suffix);
+                if (parent == null)
+                {
+                    GameObject container = new GameObject(targetName);
+                    Undo.RegisterCreatedObjectUndo(container, "Create VAT Paint Group Parent");
+                    container.transform.SetParent(root.transform, false);
+                    parent = container.transform;
+                }
+            }
+
+            parent.name = targetName;
+            parent.SetParent(root.transform, false);
+            parents[materialIndex] = parent;
+
+            return parent;
+        }
+
+        private static Transform FindChildBySuffix(Transform root, string suffix)
+        {
+            if (root == null)
+            {
+                return null;
+            }
+
+            foreach (Transform child in root)
+            {
+                if (child != null && child.name.EndsWith(suffix, StringComparison.Ordinal))
+                {
+                    return child;
+                }
+            }
+
+            return null;
+        }
+
+        private bool HasAnyValidPaintGroup()
+        {
+            foreach (PaintGroup group in paintGroups)
+            {
+                if (GroupHasValidMesh(group) && GroupHasValidMaterial(group))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool GroupHasValidMesh(PaintGroup group)
+        {
+            foreach (MeshFilter filter in group.meshFilters)
+            {
+                if (filter != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool GroupHasValidMaterial(PaintGroup group)
+        {
+            foreach (Material material in group.vatMaterials)
+            {
+                if (material != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool CanBake()
@@ -118,29 +981,15 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     DragAndDrop.AcceptDrag();
 
-                    foreach (string draggedPath in DragAndDrop.paths)
+                    bool assigned = TryAssignOutputPathFromPaths(DragAndDrop.paths) ||
+                                     TryAssignOutputPathFromObjectReferences(DragAndDrop.objectReferences);
+
+                    if (!assigned)
                     {
-                        if (Directory.Exists(draggedPath))
-                        {
-                            string projectRelativePath = ConvertToProjectRelativePath(draggedPath);
-                            if (!string.IsNullOrEmpty(projectRelativePath))
-                            {
-                                outputPath = projectRelativePath;
-                                Repaint();
-                            }
-                            else
-                            {
-                                ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
-                            }
-
-                            if (!assigned)
-                            {
-                                ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
-                            }
-                        }
-
-                        current.Use();
+                        ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
                     }
+
+                    current.Use();
                 }
             }
         }
