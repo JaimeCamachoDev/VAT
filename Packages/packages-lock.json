@@ -7,6 +7,13 @@
       "dependencies": {},
       "url": "https://registry.npmjs.org"
     },
+    "com.jaimecamacho.unityfolders": {
+      "version": "1.2.4",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {},
+      "url": "https://registry.npmjs.org"
+    },
     "com.jaimecamacho.vat": {
       "version": "file:com.jaimecamacho.vat",
       "depth": 0,
