@@ -117,8 +117,8 @@ namespace JaimeCamacho.VAT.Editor
 
         private string ConvertToProjectRelativePath(string absolutePath)
         {
-            absolutePath = absolutePath.Replace('\', '/');
-            string dataPath = Application.dataPath.Replace('\', '/');
+            absolutePath = absolutePath.Replace('\\', '/');
+            string dataPath = Application.dataPath.Replace('\\', '/');
 
             if (!absolutePath.StartsWith(dataPath))
             {
