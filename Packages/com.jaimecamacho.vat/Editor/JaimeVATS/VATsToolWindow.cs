@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -10,11 +11,15 @@ namespace JaimeCamacho.VAT.Editor
     {
         private const float k_DefaultFrameSampleStep = 0.05f;
         private const string k_KernelName = "CSMain";
+        private const string k_DefaultComputeShaderName = "MeshInfoTextureGen";
+        private const string k_DefaultComputeShaderPath = "Packages/com.jaimecamacho.vat/Editor/Tools/AnimationTextureBaker/MeshInfoTextureGen.compute";
 
         private ComputeShader infoTexGen;
         private GameObject targetObject;
         private string outputPath = "Assets/BakedAnimationTex";
         private Vector2 scrollPosition;
+        private string statusMessage = string.Empty;
+        private MessageType statusMessageType = MessageType.Info;
 
         [MenuItem("Tools/JaimeCamachoDev/VATsTool")]
         [MenuItem("Assets/JaimeCamachoDev/VATsTool")]
@@ -22,6 +27,16 @@ namespace JaimeCamacho.VAT.Editor
         {
             var window = GetWindow<VATsToolWindow>("VATs Tool");
             window.minSize = new Vector2(420f, 320f);
+        }
+
+        private void OnEnable()
+        {
+            TryAssignDefaultComputeShader();
+        }
+
+        private void OnFocus()
+        {
+            TryAssignDefaultComputeShader();
         }
 
         private void OnGUI()
@@ -39,7 +54,13 @@ namespace JaimeCamacho.VAT.Editor
             EditorGUILayout.HelpBox("Bakes VAT position textures for every animation clip on the target object's Animator.", MessageType.Info);
 
             infoTexGen = (ComputeShader)EditorGUILayout.ObjectField("Compute Shader", infoTexGen, typeof(ComputeShader), false);
+            if (infoTexGen == null)
+            {
+                EditorGUILayout.HelpBox($"If left empty, the tool will try to use '{k_DefaultComputeShaderName}'.", MessageType.Info);
+            }
             targetObject = (GameObject)EditorGUILayout.ObjectField("Target Object", targetObject, typeof(GameObject), true);
+
+            DrawTargetObjectDiagnostics();
 
             Rect pathRect = EditorGUILayout.GetControlRect();
             pathRect = EditorGUI.PrefixLabel(pathRect, new GUIContent("Output Path"));
@@ -59,7 +80,7 @@ namespace JaimeCamacho.VAT.Editor
                     }
                     else
                     {
-                        Debug.LogError("The selected folder must be inside the project's Assets directory.");
+                        ReportStatus("The selected folder must be inside the project's Assets directory.", MessageType.Error);
                     }
                 }
             }
@@ -72,6 +93,12 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     BakeVatPositionTextures();
                 }
+            }
+
+            if (!string.IsNullOrEmpty(statusMessage))
+            {
+                EditorGUILayout.Space();
+                EditorGUILayout.HelpBox(statusMessage, statusMessageType);
             }
         }
 
@@ -91,23 +118,11 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     DragAndDrop.AcceptDrag();
 
-                    foreach (string draggedPath in DragAndDrop.paths)
-                    {
-                        if (Directory.Exists(draggedPath))
-                        {
-                            string projectRelativePath = ConvertToProjectRelativePath(draggedPath);
-                            if (!string.IsNullOrEmpty(projectRelativePath))
-                            {
-                                outputPath = projectRelativePath;
-                                Repaint();
-                            }
-                            else
-                            {
-                                Debug.LogError("Dragged folder must be inside the project's Assets directory.");
-                            }
+                    bool assigned = TryAssignOutputPathFromPaths(DragAndDrop.paths) || TryAssignOutputPathFromObjectReferences(DragAndDrop.objectReferences);
 
-                            break;
-                        }
+                    if (!assigned)
+                    {
+                        ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
                     }
                 }
 
@@ -115,18 +130,174 @@ namespace JaimeCamacho.VAT.Editor
             }
         }
 
-        private string ConvertToProjectRelativePath(string absolutePath)
+        private bool TryAssignOutputPathFromPaths(IEnumerable<string> paths)
         {
-            absolutePath = absolutePath.Replace('\\', '/');
-            string dataPath = Application.dataPath.Replace('\\', '/');
+            if (paths == null)
+            {
+                return false;
+            }
 
-            if (!absolutePath.StartsWith(dataPath))
+            foreach (string path in paths)
+            {
+                if (TryAssignOutputPath(path))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryAssignOutputPathFromObjectReferences(UnityEngine.Object[] objectReferences)
+        {
+            if (objectReferences == null)
+            {
+                return false;
+            }
+
+            foreach (UnityEngine.Object reference in objectReferences)
+            {
+                if (reference == null)
+                {
+                    continue;
+                }
+
+                string assetPath = AssetDatabase.GetAssetPath(reference);
+                if (string.IsNullOrEmpty(assetPath))
+                {
+                    continue;
+                }
+
+                if (TryAssignOutputPath(assetPath))
+                {
+                    return true;
+                }
+
+                string directory = Path.GetDirectoryName(assetPath);
+                if (TryAssignOutputPath(directory))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryAssignOutputPath(string rawPath)
+        {
+            string projectRelativePath = ConvertToProjectRelativePath(rawPath);
+            if (string.IsNullOrEmpty(projectRelativePath))
+            {
+                return false;
+            }
+
+            if (!IsProjectRelativeFolder(projectRelativePath))
+            {
+                return false;
+            }
+
+            if (outputPath != projectRelativePath)
+            {
+                outputPath = projectRelativePath;
+                Repaint();
+            }
+
+            return true;
+        }
+
+        private bool IsProjectRelativeFolder(string projectRelativePath)
+        {
+            if (AssetDatabase.IsValidFolder(projectRelativePath))
+            {
+                return true;
+            }
+
+            string projectRoot = Path.GetDirectoryName(Application.dataPath);
+            if (string.IsNullOrEmpty(projectRoot))
+            {
+                return false;
+            }
+
+            string absolutePath = Path.Combine(projectRoot, projectRelativePath);
+            if (string.IsNullOrEmpty(absolutePath))
+            {
+                return false;
+            }
+
+            if (File.Exists(absolutePath))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private string ConvertToProjectRelativePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
             {
                 return string.Empty;
             }
 
-            string relativePath = "Assets" + absolutePath.Substring(dataPath.Length);
-            return relativePath.TrimEnd('/');
+            string normalizedPath = path.Replace('\\', '/').Trim();
+            if (normalizedPath.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            if (normalizedPath.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return NormalizeProjectRelativePath(normalizedPath);
+            }
+
+            string dataPath = Application.dataPath.Replace('\\', '/');
+            if (normalizedPath.StartsWith(dataPath, StringComparison.OrdinalIgnoreCase))
+            {
+                string relativePath = "Assets" + normalizedPath.Substring(dataPath.Length);
+                return NormalizeProjectRelativePath(relativePath);
+            }
+
+            return string.Empty;
+        }
+
+        private static string NormalizeProjectRelativePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return string.Empty;
+            }
+
+            string sanitizedPath = path.Replace('\\', '/').Trim();
+            if (sanitizedPath.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            string[] segments = sanitizedPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            if (!segments[0].Equals("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            for (int i = 1; i < segments.Length; i++)
+            {
+                if (segments[i] == "." || segments[i] == "..")
+                {
+                    return string.Empty;
+                }
+            }
+
+            if (segments.Length == 1)
+            {
+                return "Assets";
+            }
+
+            return "Assets/" + string.Join("/", segments, 1, segments.Length - 1);
         }
 
         private void BakeVatPositionTextures()
@@ -144,27 +315,27 @@ namespace JaimeCamacho.VAT.Editor
             SkinnedMeshRenderer skin = targetObject.GetComponentInChildren<SkinnedMeshRenderer>();
             if (skin == null)
             {
-                Debug.LogError("No SkinnedMeshRenderer found on the target object.");
+                ReportStatus("No SkinnedMeshRenderer found on the target object.", MessageType.Error);
                 return;
             }
 
             if (skin.sharedMesh == null)
             {
-                Debug.LogError("The SkinnedMeshRenderer on the target object does not have a shared mesh assigned.");
+                ReportStatus("The SkinnedMeshRenderer on the target object does not have a shared mesh assigned.", MessageType.Error);
                 return;
             }
 
             Animator animator = targetObject.GetComponent<Animator>();
             if (animator == null || animator.runtimeAnimatorController == null)
             {
-                Debug.LogError("No Animator with a RuntimeAnimatorController found on the target object.");
+                ReportStatus("No Animator with a RuntimeAnimatorController found on the target object.", MessageType.Error);
                 return;
             }
 
             AnimationClip[] clips = animator.runtimeAnimatorController.animationClips;
             if (clips == null || clips.Length == 0)
             {
-                Debug.LogWarning("No animation clips found on the target object's Animator.");
+                ReportStatus("No animation clips found on the target object's Animator.", MessageType.Warning);
                 return;
             }
 
@@ -172,6 +343,7 @@ namespace JaimeCamacho.VAT.Editor
 
             try
             {
+                ReportStatus("Baking VAT position textures...", MessageType.Info, false);
                 int vertexCount = skin.sharedMesh.vertexCount;
                 int kernel = infoTexGen.FindKernel(k_KernelName);
                 infoTexGen.GetKernelThreadGroupSizes(kernel, out uint threadSizeX, out uint threadSizeY, out _);
@@ -242,38 +414,42 @@ namespace JaimeCamacho.VAT.Editor
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
 
-            Debug.Log($"VAT position texture baking completed. Generated assets in '{outputPath}'.");
+            ReportStatus($"VAT position texture baking completed. Generated assets in '{outputPath}'.", MessageType.Info);
         }
 
         private bool ValidateInputs()
         {
             if (infoTexGen == null)
             {
-                Debug.LogError("Compute Shader is not assigned.");
-                return false;
+                TryAssignDefaultComputeShader();
+                if (infoTexGen == null)
+                {
+                    ReportStatus("Compute Shader is not assigned.", MessageType.Error);
+                    return false;
+                }
             }
 
             if (!infoTexGen.HasKernel(k_KernelName))
             {
-                Debug.LogError($"Compute Shader does not contain a kernel named '{k_KernelName}'.");
+                ReportStatus($"Compute Shader does not contain a kernel named '{k_KernelName}'.", MessageType.Error);
                 return false;
             }
 
             if (targetObject == null)
             {
-                Debug.LogError("Target Object is not assigned.");
+                ReportStatus("Target Object is not assigned.", MessageType.Error);
                 return false;
             }
 
             if (string.IsNullOrEmpty(outputPath))
             {
-                Debug.LogError("Output path cannot be empty.");
+                ReportStatus("Output path cannot be empty.", MessageType.Error);
                 return false;
             }
 
             if (!outputPath.StartsWith("Assets"))
             {
-                Debug.LogError("Output path must be inside the project's Assets directory.");
+                ReportStatus("Output path must be inside the project's Assets directory.", MessageType.Error);
                 return false;
             }
 
@@ -285,14 +461,14 @@ namespace JaimeCamacho.VAT.Editor
             string projectRoot = Path.GetDirectoryName(Application.dataPath);
             if (string.IsNullOrEmpty(projectRoot))
             {
-                Debug.LogError("Unable to determine the project root path.");
+                ReportStatus("Unable to determine the project root path.", MessageType.Error);
                 return false;
             }
 
             string absolutePath = Path.Combine(projectRoot, outputPath);
             if (string.IsNullOrEmpty(absolutePath))
             {
-                Debug.LogError("Failed to resolve the output directory.");
+                ReportStatus("Failed to resolve the output directory.", MessageType.Error);
                 return false;
             }
 
@@ -328,6 +504,103 @@ namespace JaimeCamacho.VAT.Editor
 
             renderTexture.Create();
             return renderTexture;
+        }
+
+        private void DrawTargetObjectDiagnostics()
+        {
+            if (targetObject == null)
+            {
+                return;
+            }
+
+            SkinnedMeshRenderer skin = targetObject.GetComponentInChildren<SkinnedMeshRenderer>();
+            if (skin == null)
+            {
+                EditorGUILayout.HelpBox("The selected object does not contain a SkinnedMeshRenderer. A skinned mesh is required to bake vertex animation textures.", MessageType.Warning);
+            }
+            else if (skin.sharedMesh == null)
+            {
+                EditorGUILayout.HelpBox("The detected SkinnedMeshRenderer does not have a shared mesh assigned.", MessageType.Warning);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox($"Skinned mesh detected: {skin.sharedMesh.name} ({skin.sharedMesh.vertexCount} vertices).", MessageType.Info);
+            }
+
+            Animator animator = targetObject.GetComponent<Animator>();
+            if (animator == null)
+            {
+                EditorGUILayout.HelpBox("The selected object does not contain an Animator component. Add one to sample animations.", MessageType.Warning);
+                return;
+            }
+
+            if (animator.runtimeAnimatorController == null)
+            {
+                EditorGUILayout.HelpBox("The Animator does not have a RuntimeAnimatorController assigned.", MessageType.Warning);
+                return;
+            }
+
+            AnimationClip[] clips = animator.runtimeAnimatorController.animationClips;
+            if (clips == null || clips.Length == 0)
+            {
+                EditorGUILayout.HelpBox("The Animator controller does not expose any animation clips to bake.", MessageType.Warning);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox($"Animator ready: {clips.Length} animation clip(s) detected.", MessageType.Info);
+            }
+        }
+
+        private void TryAssignDefaultComputeShader()
+        {
+            if (infoTexGen != null)
+            {
+                return;
+            }
+
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(k_DefaultComputeShaderPath);
+            if (shader == null)
+            {
+                string[] guids = AssetDatabase.FindAssets($"{k_DefaultComputeShaderName} t:ComputeShader");
+                foreach (string guid in guids)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guid);
+                    shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                    if (shader != null)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (shader != null)
+            {
+                infoTexGen = shader;
+            }
+        }
+
+        private void ReportStatus(string message, MessageType type, bool logToConsole = true)
+        {
+            statusMessage = message;
+            statusMessageType = type;
+
+            if (logToConsole)
+            {
+                switch (type)
+                {
+                    case MessageType.Error:
+                        Debug.LogError(message);
+                        break;
+                    case MessageType.Warning:
+                        Debug.LogWarning(message);
+                        break;
+                    default:
+                        Debug.Log(message);
+                        break;
+                }
+            }
+
+            Repaint();
         }
 
         private void SaveTextureAsset(Texture2D texture, string baseName)
