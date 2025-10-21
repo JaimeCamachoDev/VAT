@@ -133,13 +133,15 @@ namespace JaimeCamacho.VAT.Editor
                                 ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
                             }
 
-                    if (!assigned)
-                    {
-                        ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
+                            if (!assigned)
+                            {
+                                ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
+                            }
+                        }
+
+                        current.Use();
                     }
                 }
-
-                current.Use();
             }
         }
 
