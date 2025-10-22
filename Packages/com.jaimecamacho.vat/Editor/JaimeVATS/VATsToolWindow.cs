@@ -99,26 +99,26 @@ namespace JaimeCamacho.VAT.Editor
             ShowWindow(ToolTab.VatBaker);
         }
 
-        [MenuItem("Tools/JaimeCamachoDev/VATs Tool/VAT Baker")]
-        [MenuItem("Assets/JaimeCamachoDev/VATs Tool/VAT Baker")]
-        public static void ShowVatBaker()
-        {
-            ShowWindow(ToolTab.VatBaker);
-        }
+        //[MenuItem("Tools/JaimeCamachoDev/VATs Tool/VAT Baker")]
+        //[MenuItem("Assets/JaimeCamachoDev/VATs Tool/VAT Baker")]
+        //public static void ShowVatBaker()
+        //{
+        //    ShowWindow(ToolTab.VatBaker);
+        //}
 
-        [MenuItem("Tools/JaimeCamachoDev/VATs Tool/VAT Painter")]
-        [MenuItem("Assets/JaimeCamachoDev/VATs Tool/VAT Painter")]
-        public static void ShowVatPainter()
-        {
-            ShowWindow(ToolTab.VatPainter);
-        }
+        //[MenuItem("Tools/JaimeCamachoDev/VATs Tool/VAT Painter")]
+        //[MenuItem("Assets/JaimeCamachoDev/VATs Tool/VAT Painter")]
+        //public static void ShowVatPainter()
+        //{
+        //    ShowWindow(ToolTab.VatPainter);
+        //}
 
-        [MenuItem("Tools/JaimeCamachoDev/VATs Tool/VAT UV Visual")]
-        [MenuItem("Assets/JaimeCamachoDev/VATs Tool/VAT UV Visual")]
-        public static void ShowVatUvVisual()
-        {
-            ShowWindow(ToolTab.VatUvVisual);
-        }
+        //[MenuItem("Tools/JaimeCamachoDev/VATs Tool/VAT UV Visual")]
+        //[MenuItem("Assets/JaimeCamachoDev/VATs Tool/VAT UV Visual")]
+        //public static void ShowVatUvVisual()
+        //{
+        //    ShowWindow(ToolTab.VatUvVisual);
+        //}
 
         private static void ShowWindow(ToolTab initialTab)
         {
@@ -137,6 +137,18 @@ namespace JaimeCamacho.VAT.Editor
         {
             TryAssignDefaultComputeShader();
         }
+
+        private void SetActiveTab(ToolTab tab, bool resetScroll = false)
+        {
+            activeTabIndex = (int)tab;
+
+            if (resetScroll)
+                scrollPosition = Vector2.zero;
+
+            Repaint();
+            Focus();
+        }
+
 
         private void OnDisable()
         {
