@@ -49,15 +49,15 @@ namespace JaimeCamacho.VAT.Editor
         private enum ToolTab
         {
             VatBaker,
-            VatPainter,
-            VatUvVisual
+            VatUvVisual,
+            VatPainter
         }
 
         private static readonly GUIContent[] k_ToolTabLabels =
         {
             new GUIContent("VAT Baker"),
-            new GUIContent("VAT Painter"),
-            new GUIContent("VAT UV Visual")
+            new GUIContent("VAT UV Visual"),
+            new GUIContent("VAT Painter")
         };
 
         private int activeTabIndex;
@@ -177,6 +177,9 @@ namespace JaimeCamacho.VAT.Editor
                 case ToolTab.VatBaker:
                     DrawVatBakerSection();
                     break;
+                case ToolTab.VatUvVisual:
+                    DrawVatUvVisualSection();
+                    break;
                 case ToolTab.VatPainter:
                     DrawVatPainterSection();
                     break;
@@ -293,6 +296,16 @@ namespace JaimeCamacho.VAT.Editor
             GUILayout.Space(6f);
         }
 
+        private void DrawStatusMessageIfNeeded(ToolTab tab)
+        {
+            if (statusMessageTab != tab || string.IsNullOrEmpty(statusMessage))
+            {
+                return;
+            }
+
+            DrawMessageCard(statusMessage, statusMessageType);
+        }
+
         private static string GetDefaultMessageTitle(MessageType type)
         {
             switch (type)
@@ -355,6 +368,8 @@ namespace JaimeCamacho.VAT.Editor
         {
             DrawSectionHeader("VAT Baker", "Horneado de texturas de posición animada para tus personajes.");
 
+            DrawStatusMessageIfNeeded(ToolTab.VatBaker);
+
             DrawMessageCard("Flujo de trabajo", "Genera texturas de posición VAT para cada clip de animación del Animator del objeto seleccionado. Asegúrate de que la ruta de salida permanezca dentro de Assets.", MessageType.Info);
 
             infoTexGen = (ComputeShader)EditorGUILayout.ObjectField("Compute Shader", infoTexGen, typeof(ComputeShader), false);
@@ -404,6 +419,8 @@ namespace JaimeCamacho.VAT.Editor
         private void DrawVatPainterSection()
         {
             DrawSectionHeader("VAT Painter", "Organiza tus grupos VAT y pinta directamente en la escena.");
+
+            DrawStatusMessageIfNeeded(ToolTab.VatPainter);
 
             DrawMessageCard("Cómo funciona", "Pinta prefabs preparados para VAT sobre una superficie con MeshCollider. Cada grupo combina varias mallas y materiales para generar variedad automática.", MessageType.Info);
 
@@ -467,6 +484,106 @@ namespace JaimeCamacho.VAT.Editor
                 DrawMessageCard("Controles en escena", "Haz clic izquierdo en la vista de escena para pintar instancias VAT. Mantén Alt para seguir navegando con la cámara.", MessageType.Info);
             }
 
+        }
+
+        private void DrawVatUvVisualSection()
+        {
+            DrawSectionHeader("VAT UV Visual", "Ajusta visualmente las coordenadas UV de una malla con una textura de referencia.");
+
+            DrawStatusMessageIfNeeded(ToolTab.VatUvVisual);
+
+            DrawMessageCard("Consejos de uso", "Haz clic y arrastra en la vista previa para desplazar las UV. Mientras arrastras usa la rueda del ratón para escalar y emplea el control de rotación para giros precisos.", MessageType.Info);
+
+            uvVisualReferenceTexture = (Texture2D)EditorGUILayout.ObjectField("Textura de referencia", uvVisualReferenceTexture, typeof(Texture2D), false);
+
+            MeshFilter newTarget = (MeshFilter)EditorGUILayout.ObjectField("Mesh Filter objetivo", uvVisualTargetMeshFilter, typeof(MeshFilter), true);
+            if (newTarget != uvVisualTargetMeshFilter)
+            {
+                uvVisualTargetMeshFilter = newTarget;
+                ResetUvVisualTargetCache();
+                ResetUvVisualTransform();
+                Repaint();
+            }
+
+            Mesh mesh = GetUvVisualMesh();
+
+            DrawUvVisualDiagnostics(mesh);
+
+            bool hasValidUvs = uvVisualOriginalUvs != null && uvVisualOriginalUvs.Length > 0;
+
+            using (new EditorGUI.DisabledScope(!hasValidUvs))
+            {
+                uvVisualPosition = EditorGUILayout.Vector2Field("Posición", uvVisualPosition);
+
+                EditorGUILayout.BeginHorizontal();
+                Vector2 newScale = EditorGUILayout.Vector2Field("Escala", uvVisualScale);
+
+                if (uvVisualLockUniformScale)
+                {
+                    if (!Mathf.Approximately(newScale.x, uvVisualScale.x))
+                    {
+                        newScale.y = newScale.x;
+                    }
+                    else if (!Mathf.Approximately(newScale.y, uvVisualScale.y))
+                    {
+                        newScale.x = newScale.y;
+                    }
+                }
+
+                newScale.x = Mathf.Clamp(newScale.x, 0.01f, 100f);
+                newScale.y = Mathf.Clamp(newScale.y, 0.01f, 100f);
+
+                bool newLock = GUILayout.Toggle(uvVisualLockUniformScale, new GUIContent("Uniforme"), "Button", GUILayout.Width(90f));
+                if (!uvVisualLockUniformScale && newLock)
+                {
+                    float uniform = Mathf.Max(0.01f, (newScale.x + newScale.y) * 0.5f);
+                    newScale = new Vector2(uniform, uniform);
+                }
+
+                uvVisualScale = newScale;
+                uvVisualLockUniformScale = newLock;
+
+                EditorGUILayout.EndHorizontal();
+
+                uvVisualRotation = EditorGUILayout.Slider("Rotación", uvVisualRotation, -360f, 360f);
+            }
+
+            EditorGUILayout.Space();
+
+            Rect previewRect = GUILayoutUtility.GetAspectRect(1f, GUILayout.ExpandWidth(true), GUILayout.MaxHeight(420f));
+            DrawUvVisualBackground(previewRect);
+
+            if (uvVisualReferenceTexture != null && Event.current.type == EventType.Repaint)
+            {
+                GUI.DrawTexture(previewRect, uvVisualReferenceTexture, ScaleMode.ScaleToFit);
+            }
+
+            DrawUvVisualGrid(previewRect);
+            DrawUvVisualPreview(previewRect, mesh);
+
+            EditorGUILayout.Space();
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Restablecer gizmo"))
+                {
+                    ResetUvVisualTransform();
+                    Repaint();
+                }
+
+                using (new EditorGUI.DisabledScope(!hasValidUvs))
+                {
+                    if (GUILayout.Button("Aplicar UV a la malla"))
+                    {
+                        ApplyUvVisualTransform(mesh);
+                    }
+
+                    if (GUILayout.Button("Restaurar UV originales"))
+                    {
+                        UndoUvVisualChanges(mesh);
+                    }
+                }
+            }
         }
 
         private void DrawUvVisualDiagnostics(Mesh mesh)
@@ -939,12 +1056,6 @@ namespace JaimeCamacho.VAT.Editor
                     {
                         InvalidatePainterHierarchy(group);
                     }
-                }
-
-                if (GUILayout.Button("Restablecer gizmo", GUILayout.Width(160f)))
-                {
-                    ResetUvVisualTransform();
-                    Repaint();
                 }
             }
 
