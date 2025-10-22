@@ -17,6 +17,9 @@ namespace JaimeCamacho.VAT.Editor
         private ComputeShader infoTexGen;
         private GameObject targetObject;
         private string outputPath = "Assets/BakedAnimationTex";
+        private GameObject combinerParentObject;
+        private string combinerOutputPath = "Assets/CombinedMeshes";
+        private Shader combinerVatMultipleShader;
         private Vector2 scrollPosition;
         private string statusMessage = string.Empty;
         private MessageType statusMessageType = MessageType.Info;
@@ -50,14 +53,16 @@ namespace JaimeCamacho.VAT.Editor
         {
             VatBaker,
             VatUvVisual,
-            VatPainter
+            VatPainter,
+            VatCombiner
         }
 
         private static readonly GUIContent[] k_ToolTabLabels =
         {
             new GUIContent("VAT Baker"),
             new GUIContent("VAT UV Visual"),
-            new GUIContent("VAT Painter")
+            new GUIContent("VAT Painter"),
+            new GUIContent("VAT Combiner")
         };
 
         private int activeTabIndex;
@@ -182,6 +187,9 @@ namespace JaimeCamacho.VAT.Editor
                     break;
                 case ToolTab.VatPainter:
                     DrawVatPainterSection();
+                    break;
+                case ToolTab.VatCombiner:
+                    DrawVatCombinerSection();
                     break;
             }
 
@@ -413,6 +421,97 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     BakeVatPositionTextures();
                 }
+            }
+        }
+
+        private void DrawVatCombinerSection()
+        {
+            DrawSectionHeader("VAT Combiner", "Combina múltiples MeshFilters en un único mesh y material compatible con VAT Turbo.");
+
+            DrawStatusMessageIfNeeded(ToolTab.VatCombiner);
+
+            DrawMessageCard("Descripción", "Fusiona geometría estática en un mesh optimizado y genera un material VAT Multiple con offsets y rotaciones prehorneados, replicando la herramienta Mesh Combiner Turbo.", MessageType.Info);
+
+            combinerParentObject = (GameObject)EditorGUILayout.ObjectField("Objeto raíz", combinerParentObject, typeof(GameObject), true);
+
+            DrawCombinerDiagnostics();
+
+            combinerVatMultipleShader = (Shader)EditorGUILayout.ObjectField("Shader VAT Multiple", combinerVatMultipleShader, typeof(Shader), false);
+            if (combinerVatMultipleShader == null)
+            {
+                DrawMessageCard("Shader requerido", "Asigna el shader VAT Multiple que utilizará el material combinado.", MessageType.Info);
+            }
+
+            Rect pathRect = EditorGUILayout.GetControlRect();
+            pathRect = EditorGUI.PrefixLabel(pathRect, new GUIContent("Ruta de salida"));
+            combinerOutputPath = EditorGUI.TextField(pathRect, combinerOutputPath);
+            HandleDragAndDrop(pathRect, ref combinerOutputPath);
+
+            if (!IsCombinerOutputPathValid())
+            {
+                DrawMessageCard("Ruta no válida", "La ruta debe estar dentro de la carpeta Assets del proyecto para guardar el mesh, material y prefab combinados.", MessageType.Warning);
+            }
+
+            if (GUILayout.Button("Seleccionar carpeta"))
+            {
+                string selectedFolder = EditorUtility.OpenFolderPanel("Seleccionar carpeta de salida", Application.dataPath, string.Empty);
+                if (!string.IsNullOrEmpty(selectedFolder))
+                {
+                    string projectRelativePath = ConvertToProjectRelativePath(selectedFolder);
+                    if (!string.IsNullOrEmpty(projectRelativePath) && IsProjectRelativeFolder(projectRelativePath))
+                    {
+                        combinerOutputPath = projectRelativePath;
+                        Repaint();
+                    }
+                    else
+                    {
+                        ReportStatus("La carpeta seleccionada debe estar dentro de la carpeta Assets del proyecto.", MessageType.Error);
+                    }
+                }
+            }
+
+            EditorGUILayout.Space();
+
+            using (new EditorGUI.DisabledScope(!CanCombineMeshes()))
+            {
+                if (GUILayout.Button("Combinar y guardar VAT Turbo"))
+                {
+                    CombineVatMeshesTurbo();
+                }
+            }
+        }
+
+        private void DrawCombinerDiagnostics()
+        {
+            if (combinerParentObject == null)
+            {
+                DrawMessageCard("Objeto requerido", "Selecciona un GameObject raíz que contenga los MeshFilters a combinar.", MessageType.Info);
+                return;
+            }
+
+            MeshFilter[] meshFilters = combinerParentObject.GetComponentsInChildren<MeshFilter>();
+            if (meshFilters == null || meshFilters.Length == 0)
+            {
+                DrawMessageCard("MeshFilters faltantes", "El objeto raíz no contiene MeshFilters en su jerarquía.", MessageType.Warning);
+                return;
+            }
+
+            int validCount = 0;
+            foreach (MeshFilter meshFilter in meshFilters)
+            {
+                if (meshFilter != null && meshFilter.sharedMesh != null && meshFilter.sharedMesh.vertexCount > 0)
+                {
+                    validCount++;
+                }
+            }
+
+            if (validCount == 0)
+            {
+                DrawMessageCard("Mallas faltantes", "Los MeshFilters detectados no tienen mallas asignadas.", MessageType.Warning);
+            }
+            else
+            {
+                DrawMessageCard("Listo para combinar", $"Se detectaron {validCount} mallas válidas para combinar.", MessageType.Info);
             }
         }
 
@@ -1672,12 +1771,37 @@ namespace JaimeCamacho.VAT.Editor
             return false;
         }
 
+        private bool CanCombineMeshes()
+        {
+            return combinerParentObject != null && combinerVatMultipleShader != null && IsCombinerOutputPathValid();
+        }
+
+        private bool IsCombinerOutputPathValid()
+        {
+            if (string.IsNullOrEmpty(combinerOutputPath))
+            {
+                return false;
+            }
+
+            if (!combinerOutputPath.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return IsProjectRelativeFolder(combinerOutputPath);
+        }
+
         private bool CanBake()
         {
             return infoTexGen != null && targetObject != null && !string.IsNullOrEmpty(outputPath);
         }
 
         private void HandleDragAndDrop(Rect dropArea)
+        {
+            HandleDragAndDrop(dropArea, ref outputPath);
+        }
+
+        private void HandleDragAndDrop(Rect dropArea, ref string targetPath)
         {
             Event current = Event.current;
             if ((current.type == EventType.DragUpdated || current.type == EventType.DragPerform) && dropArea.Contains(current.mousePosition))
@@ -1688,8 +1812,8 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     DragAndDrop.AcceptDrag();
 
-                    bool assigned = TryAssignOutputPathFromPaths(DragAndDrop.paths) ||
-                                     TryAssignOutputPathFromObjectReferences(DragAndDrop.objectReferences);
+                    bool assigned = TryAssignOutputPathFromPaths(DragAndDrop.paths, ref targetPath) ||
+                                     TryAssignOutputPathFromObjectReferences(DragAndDrop.objectReferences, ref targetPath);
 
                     if (!assigned)
                     {
@@ -1703,7 +1827,7 @@ namespace JaimeCamacho.VAT.Editor
             EditorGUI.indentLevel--;
         }
 
-        private bool TryAssignOutputPathFromPaths(IEnumerable<string> paths)
+        private bool TryAssignOutputPathFromPaths(IEnumerable<string> paths, ref string targetPath)
         {
             if (paths == null)
             {
@@ -1712,7 +1836,7 @@ namespace JaimeCamacho.VAT.Editor
 
             foreach (string path in paths)
             {
-                if (TryAssignOutputPath(path))
+                if (TryAssignOutputPath(path, ref targetPath))
                 {
                     return true;
                 }
@@ -1721,7 +1845,7 @@ namespace JaimeCamacho.VAT.Editor
             return false;
         }
 
-        private bool TryAssignOutputPathFromObjectReferences(UnityEngine.Object[] objectReferences)
+        private bool TryAssignOutputPathFromObjectReferences(UnityEngine.Object[] objectReferences, ref string targetPath)
         {
             if (objectReferences == null)
             {
@@ -1741,13 +1865,13 @@ namespace JaimeCamacho.VAT.Editor
                     continue;
                 }
 
-                if (TryAssignOutputPath(assetPath))
+                if (TryAssignOutputPath(assetPath, ref targetPath))
                 {
                     return true;
                 }
 
                 string directory = Path.GetDirectoryName(assetPath);
-                if (TryAssignOutputPath(directory))
+                if (!string.IsNullOrEmpty(directory) && TryAssignOutputPath(directory, ref targetPath))
                 {
                     return true;
                 }
@@ -1756,7 +1880,7 @@ namespace JaimeCamacho.VAT.Editor
             return false;
         }
 
-        private bool TryAssignOutputPath(string rawPath)
+        private bool TryAssignOutputPath(string rawPath, ref string targetPath)
         {
             string projectRelativePath = ConvertToProjectRelativePath(rawPath);
             if (string.IsNullOrEmpty(projectRelativePath))
@@ -1769,9 +1893,9 @@ namespace JaimeCamacho.VAT.Editor
                 return false;
             }
 
-            if (outputPath != projectRelativePath)
+            if (!string.Equals(targetPath, projectRelativePath, StringComparison.Ordinal))
             {
-                outputPath = projectRelativePath;
+                targetPath = projectRelativePath;
                 Repaint();
             }
 
@@ -1871,6 +1995,202 @@ namespace JaimeCamacho.VAT.Editor
             }
 
             return "Assets/" + string.Join("/", segments, 1, segments.Length - 1);
+        }
+
+        private bool ValidateCombinerInputs()
+        {
+            if (combinerParentObject == null)
+            {
+                ReportStatus("Asigna un objeto raíz que contenga los MeshFilters a combinar.", MessageType.Error);
+                return false;
+            }
+
+            if (combinerVatMultipleShader == null)
+            {
+                ReportStatus("Asigna un shader VAT Multiple para generar el material combinado.", MessageType.Error);
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(combinerOutputPath))
+            {
+                ReportStatus("La ruta de salida no puede estar vacía.", MessageType.Error);
+                return false;
+            }
+
+            if (!IsCombinerOutputPathValid())
+            {
+                ReportStatus("La ruta de salida debe estar dentro de la carpeta Assets del proyecto.", MessageType.Error);
+                return false;
+            }
+
+            return true;
+        }
+
+        private void CombineVatMeshesTurbo()
+        {
+            if (!ValidateCombinerInputs())
+            {
+                return;
+            }
+
+            MeshFilter[] meshFilters = combinerParentObject.GetComponentsInChildren<MeshFilter>();
+            if (meshFilters == null || meshFilters.Length == 0)
+            {
+                ReportStatus("No se encontraron MeshFilters bajo el objeto raíz seleccionado.", MessageType.Error);
+                return;
+            }
+
+            List<CombineInstance> combineInstances = new List<CombineInstance>();
+            List<Vector4> combinedOffsets = new List<Vector4>();
+            List<Vector4> combinedRotations = new List<Vector4>();
+            List<Material> originalMaterials = new List<Material>();
+
+            foreach (MeshFilter meshFilter in meshFilters)
+            {
+                if (meshFilter == null)
+                {
+                    continue;
+                }
+
+                Mesh mesh = meshFilter.sharedMesh;
+                if (mesh == null || mesh.vertexCount == 0)
+                {
+                    continue;
+                }
+
+                CombineInstance instance = new CombineInstance
+                {
+                    mesh = mesh,
+                    transform = meshFilter.transform.localToWorldMatrix
+                };
+                combineInstances.Add(instance);
+
+                Vector3 position = meshFilter.transform.position;
+                Quaternion rotation = meshFilter.transform.rotation;
+
+                for (int i = 0; i < mesh.vertexCount; i++)
+                {
+                    combinedOffsets.Add(new Vector4(position.x, position.y, position.z, 0f));
+                    combinedRotations.Add(new Vector4(rotation.x, rotation.y, rotation.z, rotation.w));
+                }
+
+                MeshRenderer renderer = meshFilter.GetComponent<MeshRenderer>();
+                if (renderer != null && renderer.sharedMaterial != null)
+                {
+                    originalMaterials.Add(renderer.sharedMaterial);
+                }
+            }
+
+            if (combineInstances.Count == 0)
+            {
+                ReportStatus("Los MeshFilters encontrados no contienen mallas válidas para combinar.", MessageType.Error);
+                return;
+            }
+
+            Mesh combinedMesh = new Mesh
+            {
+                name = combinerParentObject.name + "_TurboCombinedMesh"
+            };
+
+            if (combinedOffsets.Count > 65535)
+            {
+                combinedMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            }
+
+            combinedMesh.CombineMeshes(combineInstances.ToArray(), true, true);
+            combinedMesh.SetUVs(2, combinedOffsets);
+            combinedMesh.SetUVs(3, combinedRotations);
+            combinedMesh.RecalculateBounds();
+
+            GameObject combinedObject = new GameObject(combinerParentObject.name + "_TurboCombined");
+            combinedObject.AddComponent<MeshFilter>().sharedMesh = combinedMesh;
+
+            Material vatMaterial = new Material(combinerVatMultipleShader);
+            if (originalMaterials.Count > 0)
+            {
+                CopyMaterialProperties(originalMaterials[0], vatMaterial);
+            }
+
+            vatMaterial.SetInt("_NumberOfMeshes", combineInstances.Count);
+            vatMaterial.SetInt("_TotalVertex", combinedMesh.vertexCount);
+
+            MeshRenderer finalRenderer = combinedObject.AddComponent<MeshRenderer>();
+            finalRenderer.sharedMaterial = vatMaterial;
+
+            if (!EnsureDirectoryExists(combinerOutputPath))
+            {
+                DestroyImmediate(combinedObject);
+                return;
+            }
+
+            string sanitizedMeshPath = Path.Combine(combinerOutputPath, combinedMesh.name + ".asset").Replace("\\", "/");
+            string meshAssetPath = AssetDatabase.GenerateUniqueAssetPath(sanitizedMeshPath);
+            AssetDatabase.CreateAsset(combinedMesh, meshAssetPath);
+
+            string sanitizedMatPath = Path.Combine(combinerOutputPath, combinerParentObject.name + "_TurboVAT_Material.mat").Replace("\\", "/");
+            string matAssetPath = AssetDatabase.GenerateUniqueAssetPath(sanitizedMatPath);
+            AssetDatabase.CreateAsset(vatMaterial, matAssetPath);
+
+            AssetDatabase.SaveAssets();
+
+            string sanitizedPrefabPath = Path.Combine(combinerOutputPath, combinedObject.name + ".prefab").Replace("\\", "/");
+            string prefabPath = AssetDatabase.GenerateUniqueAssetPath(sanitizedPrefabPath);
+            PrefabUtility.SaveAsPrefabAsset(combinedObject, prefabPath);
+            AssetDatabase.SaveAssets();
+
+            GameObject prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            GameObject prefabInstance = null;
+            if (prefabAsset != null)
+            {
+                prefabInstance = PrefabUtility.InstantiatePrefab(prefabAsset) as GameObject;
+            }
+            if (prefabInstance != null)
+            {
+                Selection.activeGameObject = prefabInstance;
+            }
+
+            DestroyImmediate(combinedObject);
+
+            ReportStatus($"Combinación completada. Recursos guardados en '{combinerOutputPath}'.", MessageType.Info);
+            SceneView.RepaintAll();
+        }
+
+        private static void CopyMaterialProperties(Material source, Material destination)
+        {
+            if (source == null || destination == null)
+            {
+                return;
+            }
+
+            Shader sourceShader = source.shader;
+            if (sourceShader == null)
+            {
+                return;
+            }
+
+            int propertyCount = ShaderUtil.GetPropertyCount(sourceShader);
+            for (int i = 0; i < propertyCount; i++)
+            {
+                string propertyName = ShaderUtil.GetPropertyName(sourceShader, i);
+                ShaderUtil.ShaderPropertyType propertyType = ShaderUtil.GetPropertyType(sourceShader, i);
+
+                switch (propertyType)
+                {
+                    case ShaderUtil.ShaderPropertyType.Color:
+                        destination.SetColor(propertyName, source.GetColor(propertyName));
+                        break;
+                    case ShaderUtil.ShaderPropertyType.Vector:
+                        destination.SetVector(propertyName, source.GetVector(propertyName));
+                        break;
+                    case ShaderUtil.ShaderPropertyType.Float:
+                    case ShaderUtil.ShaderPropertyType.Range:
+                        destination.SetFloat(propertyName, source.GetFloat(propertyName));
+                        break;
+                    case ShaderUtil.ShaderPropertyType.TexEnv:
+                        destination.SetTexture(propertyName, source.GetTexture(propertyName));
+                        break;
+                }
+            }
         }
 
         private void BakeVatPositionTextures()
@@ -2031,6 +2351,17 @@ namespace JaimeCamacho.VAT.Editor
 
         private bool EnsureOutputDirectory()
         {
+            return EnsureDirectoryExists(outputPath);
+        }
+
+        private bool EnsureDirectoryExists(string projectRelativePath)
+        {
+            if (string.IsNullOrEmpty(projectRelativePath))
+            {
+                ReportStatus("La ruta de salida no puede estar vacía.", MessageType.Error);
+                return false;
+            }
+
             string projectRoot = Path.GetDirectoryName(Application.dataPath);
             if (string.IsNullOrEmpty(projectRoot))
             {
@@ -2038,7 +2369,7 @@ namespace JaimeCamacho.VAT.Editor
                 return false;
             }
 
-            string absolutePath = Path.Combine(projectRoot, outputPath);
+            string absolutePath = Path.Combine(projectRoot, projectRelativePath);
             if (string.IsNullOrEmpty(absolutePath))
             {
                 ReportStatus("No se pudo resolver el directorio de salida.", MessageType.Error);
