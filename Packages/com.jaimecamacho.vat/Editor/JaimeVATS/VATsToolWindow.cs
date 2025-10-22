@@ -20,6 +20,77 @@ namespace JaimeCamacho.VAT.Editor
         private Vector2 scrollPosition;
         private string statusMessage = string.Empty;
         private MessageType statusMessageType = MessageType.Info;
+        private ToolTab statusMessageTab = ToolTab.VatBaker;
+
+        private static GUIStyle sectionTitleStyle;
+        private static GUIStyle sectionSubtitleStyle;
+        private static GUIStyle messageCardStyle;
+        private static GUIStyle messageTitleStyle;
+        private static GUIStyle messageBodyStyle;
+        private static readonly Dictionary<MessageType, GUIContent> messageIcons = new Dictionary<MessageType, GUIContent>();
+
+        private Texture2D uvVisualReferenceTexture;
+        private MeshFilter uvVisualTargetMeshFilter;
+        private Mesh uvVisualLastMesh;
+        private Vector2 uvVisualPosition;
+        private Vector2 uvVisualScale = Vector2.one;
+        private float uvVisualRotation;
+        private Vector2[] uvVisualOriginalUvs;
+        private Vector2[] uvVisualInitialUvs;
+        private bool uvVisualLockUniformScale = true;
+        private bool uvVisualIsDragging;
+        private Vector2 uvVisualDragStartMousePos;
+        private Vector2 uvVisualDragStartUvPos;
+
+        private const string k_PaintRootName = "VATPaintRoot";
+        private static readonly Color k_BrushFillColor = new Color(0f, 0.5f, 1f, 0.25f);
+        private static readonly Color k_BrushOutlineColor = Color.cyan;
+
+        private enum ToolTab
+        {
+            VatBaker,
+            VatPainter,
+            VatUvVisual
+        }
+
+        private static readonly GUIContent[] k_ToolTabLabels =
+        {
+            new GUIContent("VAT Baker"),
+            new GUIContent("VAT Painter"),
+            new GUIContent("VAT UV Visual")
+        };
+
+        private int activeTabIndex;
+
+        [Serializable]
+        private class PaintGroup
+        {
+            public string groupName = "New Group";
+            public string id;
+            public List<MeshFilter> meshFilters = new List<MeshFilter>();
+            public List<Material> vatMaterials = new List<Material>();
+            public bool isExpanded = true;
+
+            public PaintGroup()
+            {
+                id = Guid.NewGuid().ToString("N");
+            }
+        }
+
+        private readonly List<PaintGroup> paintGroups = new List<PaintGroup>();
+        private readonly Dictionary<PaintGroup, List<Transform>> paintGroupParents = new Dictionary<PaintGroup, List<Transform>>();
+        private readonly List<PaintGroup> reusablePaintGroups = new List<PaintGroup>();
+        private readonly List<int> reusableMeshFilterIndices = new List<int>();
+        private readonly List<int> reusableMaterialIndices = new List<int>();
+
+        private Transform painterFocusTarget;
+        private GameObject painterSurface;
+        private MeshCollider painterSurfaceCollider;
+        private bool painterPaintingMode;
+        private GameObject painterRoot;
+        private float painterBrushRadius = 2f;
+        private int painterBrushDensity = 5;
+        private float painterMinDistance = 0.5f;
 
         [MenuItem("Tools/JaimeCamachoDev/VATsTool")]
         [MenuItem("Assets/JaimeCamachoDev/VATsTool")]
@@ -39,37 +110,246 @@ namespace JaimeCamacho.VAT.Editor
             TryAssignDefaultComputeShader();
         }
 
+        private void OnDisable()
+        {
+            if (painterPaintingMode)
+            {
+                TogglePaintingMode(false);
+            }
+        }
+
         private void OnGUI()
         {
+            EditorGUI.BeginChangeCheck();
+            int newTabIndex = GUILayout.Toolbar(activeTabIndex, k_ToolTabLabels);
+            if (EditorGUI.EndChangeCheck())
+            {
+                ToolTab previousTab = (ToolTab)activeTabIndex;
+                activeTabIndex = newTabIndex;
+                scrollPosition = Vector2.zero;
+
+                if (previousTab == ToolTab.VatPainter && (ToolTab)activeTabIndex != ToolTab.VatPainter && painterPaintingMode)
+                {
+                    TogglePaintingMode(false);
+                }
+            }
+
+            EditorGUILayout.Space();
+
             scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
 
-            DrawVatBakerSection();
+            switch ((ToolTab)activeTabIndex)
+            {
+                case ToolTab.VatBaker:
+                    DrawVatBakerSection();
+                    break;
+                case ToolTab.VatPainter:
+                    DrawVatPainterSection();
+                    break;
+                case ToolTab.VatUvVisual:
+                    DrawVatUvVisualSection();
+                    break;
+            }
+
+            if (!string.IsNullOrEmpty(statusMessage) && statusMessageTab == (ToolTab)activeTabIndex)
+            {
+                EditorGUILayout.Space();
+                DrawMessageCard(statusMessage, statusMessageType);
+            }
 
             EditorGUILayout.EndScrollView();
         }
 
+        private void DrawSectionHeader(string title, string subtitle)
+        {
+            EnsureUiStyles();
+
+            float height = string.IsNullOrEmpty(subtitle) ? 28f : 42f;
+            Rect rect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Height(height), GUILayout.ExpandWidth(true));
+
+            Color background = EditorGUIUtility.isProSkin ? new Color(0.16f, 0.16f, 0.16f, 0.95f) : new Color(0.93f, 0.93f, 0.93f, 0.95f);
+            Color accent = new Color(0.25f, 0.6f, 1f, 0.9f);
+
+            EditorGUI.DrawRect(rect, background);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, 4f, rect.height), accent);
+
+            Rect contentRect = new Rect(rect.x + 10f, rect.y + 6f, rect.width - 14f, rect.height - 12f);
+            GUI.Label(new Rect(contentRect.x, contentRect.y, contentRect.width, 18f), title, sectionTitleStyle);
+
+            if (!string.IsNullOrEmpty(subtitle))
+            {
+                GUI.Label(new Rect(contentRect.x, contentRect.y + 18f, contentRect.width, 16f), subtitle, sectionSubtitleStyle);
+            }
+
+            GUILayout.Space(6f);
+        }
+
+        private static void EnsureUiStyles()
+        {
+            if (sectionTitleStyle == null)
+            {
+                sectionTitleStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    fontSize = 15,
+                    richText = true
+                };
+            }
+
+            if (sectionSubtitleStyle == null)
+            {
+                sectionSubtitleStyle = new GUIStyle(EditorStyles.miniLabel)
+                {
+                    wordWrap = true,
+                    fontSize = 11,
+                    richText = true
+                };
+            }
+
+            if (messageCardStyle == null)
+            {
+                messageCardStyle = new GUIStyle(EditorStyles.helpBox)
+                {
+                    richText = true,
+                    wordWrap = true,
+                    padding = new RectOffset(12, 12, 10, 10)
+                };
+            }
+
+            if (messageTitleStyle == null)
+            {
+                messageTitleStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    fontSize = 12,
+                    richText = true,
+                    wordWrap = true
+                };
+            }
+
+            if (messageBodyStyle == null)
+            {
+                messageBodyStyle = new GUIStyle(EditorStyles.label)
+                {
+                    wordWrap = true,
+                    richText = true
+                };
+            }
+        }
+
+        private void DrawMessageCard(string message, MessageType type)
+        {
+            DrawMessageCard(GetDefaultMessageTitle(type), message, type);
+        }
+
+        private void DrawMessageCard(string title, string message, MessageType type)
+        {
+            EnsureUiStyles();
+            GetMessageColors(type, out Color background, out Color accent);
+
+            Rect rect = EditorGUILayout.BeginVertical(messageCardStyle);
+            EditorGUI.DrawRect(rect, background);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, 4f, rect.height), accent);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUIContent icon = GetMessageIcon(type);
+                if (icon != null && icon.image != null)
+                {
+                    GUILayout.Label(icon, GUILayout.Width(36f), GUILayout.Height(36f));
+                }
+
+                using (new EditorGUILayout.VerticalScope())
+                {
+                    EditorGUILayout.LabelField(title, messageTitleStyle);
+                    EditorGUILayout.LabelField(message, messageBodyStyle);
+                }
+            }
+
+            EditorGUILayout.EndVertical();
+            GUILayout.Space(6f);
+        }
+
+        private static string GetDefaultMessageTitle(MessageType type)
+        {
+            switch (type)
+            {
+                case MessageType.Error:
+                    return "Error";
+                case MessageType.Warning:
+                    return "Advertencia";
+                case MessageType.Info:
+                    return "Información";
+                default:
+                    return "Nota";
+            }
+        }
+
+        private static GUIContent GetMessageIcon(MessageType type)
+        {
+            if (!messageIcons.TryGetValue(type, out GUIContent icon) || icon == null)
+            {
+                string iconName = type switch
+                {
+                    MessageType.Error => EditorGUIUtility.isProSkin ? "d_console.erroricon" : "console.erroricon",
+                    MessageType.Warning => EditorGUIUtility.isProSkin ? "d_console.warnicon" : "console.warnicon",
+                    MessageType.Info => EditorGUIUtility.isProSkin ? "d_console.infoicon" : "console.infoicon",
+                    _ => EditorGUIUtility.isProSkin ? "d_console.infoicon" : "console.infoicon"
+                };
+
+                icon = EditorGUIUtility.IconContent(iconName);
+                messageIcons[type] = icon;
+            }
+
+            return icon;
+        }
+
+        private static void GetMessageColors(MessageType type, out Color background, out Color accent)
+        {
+            bool pro = EditorGUIUtility.isProSkin;
+            switch (type)
+            {
+                case MessageType.Error:
+                    accent = new Color(0.85f, 0.3f, 0.3f, 1f);
+                    background = pro ? new Color(0.45f, 0.18f, 0.18f, 0.65f) : new Color(1f, 0.8f, 0.8f, 0.65f);
+                    break;
+                case MessageType.Warning:
+                    accent = new Color(0.95f, 0.65f, 0.2f, 1f);
+                    background = pro ? new Color(0.45f, 0.32f, 0.15f, 0.65f) : new Color(1f, 0.9f, 0.75f, 0.65f);
+                    break;
+                case MessageType.Info:
+                    accent = new Color(0.3f, 0.65f, 1f, 1f);
+                    background = pro ? new Color(0.18f, 0.32f, 0.5f, 0.65f) : new Color(0.72f, 0.84f, 1f, 0.6f);
+                    break;
+                default:
+                    accent = new Color(0.55f, 0.55f, 0.55f, 1f);
+                    background = pro ? new Color(0.25f, 0.25f, 0.25f, 0.6f) : new Color(0.9f, 0.9f, 0.9f, 0.55f);
+                    break;
+            }
+        }
+
         private void DrawVatBakerSection()
         {
-            EditorGUILayout.LabelField("VAT Baker", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox("Bakes VAT position textures for every animation clip on the target object's Animator.", MessageType.Info);
+            DrawSectionHeader("VAT Baker", "Horneado de texturas de posición animada para tus personajes.");
+
+            DrawMessageCard("Flujo de trabajo", "Genera texturas de posición VAT para cada clip de animación del Animator del objeto seleccionado. Asegúrate de que la ruta de salida permanezca dentro de Assets.", MessageType.Info);
 
             infoTexGen = (ComputeShader)EditorGUILayout.ObjectField("Compute Shader", infoTexGen, typeof(ComputeShader), false);
             if (infoTexGen == null)
             {
-                EditorGUILayout.HelpBox($"If left empty, the tool will try to use '{k_DefaultComputeShaderName}'.", MessageType.Info);
+                DrawMessageCard("Shader sugerido", $"Si lo dejas vacío, la herramienta intentará usar \"{k_DefaultComputeShaderName}\" automáticamente.", MessageType.Info);
             }
-            targetObject = (GameObject)EditorGUILayout.ObjectField("Target Object", targetObject, typeof(GameObject), true);
+
+            targetObject = (GameObject)EditorGUILayout.ObjectField("Objeto de destino", targetObject, typeof(GameObject), true);
 
             DrawTargetObjectDiagnostics();
 
             Rect pathRect = EditorGUILayout.GetControlRect();
-            pathRect = EditorGUI.PrefixLabel(pathRect, new GUIContent("Output Path"));
+            pathRect = EditorGUI.PrefixLabel(pathRect, new GUIContent("Ruta de salida"));
             outputPath = EditorGUI.TextField(pathRect, outputPath);
             HandleDragAndDrop(pathRect);
 
-            if (GUILayout.Button("Select Folder"))
+            if (GUILayout.Button("Seleccionar carpeta"))
             {
-                string selectedFolder = EditorUtility.OpenFolderPanel("Select Output Folder", Application.dataPath, string.Empty);
+                string selectedFolder = EditorUtility.OpenFolderPanel("Seleccionar carpeta de salida", Application.dataPath, string.Empty);
                 if (!string.IsNullOrEmpty(selectedFolder))
                 {
                     string projectRelativePath = ConvertToProjectRelativePath(selectedFolder);
@@ -80,7 +360,7 @@ namespace JaimeCamacho.VAT.Editor
                     }
                     else
                     {
-                        ReportStatus("The selected folder must be inside the project's Assets directory.", MessageType.Error);
+                        ReportStatus("La carpeta seleccionada debe estar dentro de la carpeta Assets del proyecto.", MessageType.Error);
                     }
                 }
             }
@@ -89,17 +369,1240 @@ namespace JaimeCamacho.VAT.Editor
 
             using (new EditorGUI.DisabledScope(!CanBake()))
             {
-                if (GUILayout.Button("Bake VAT Position Textures"))
+                if (GUILayout.Button("Hornear texturas de posición VAT"))
                 {
                     BakeVatPositionTextures();
                 }
             }
+        }
 
-            if (!string.IsNullOrEmpty(statusMessage))
+        private void DrawVatPainterSection()
+        {
+            DrawSectionHeader("VAT Painter", "Organiza tus grupos VAT y pinta directamente en la escena.");
+
+            DrawMessageCard("Cómo funciona", "Pinta prefabs preparados para VAT sobre una superficie con MeshCollider. Cada grupo combina varias mallas y materiales para generar variedad automática.", MessageType.Info);
+
+            using (new EditorGUILayout.HorizontalScope())
             {
-                EditorGUILayout.Space();
-                EditorGUILayout.HelpBox(statusMessage, statusMessageType);
+                if (GUILayout.Button("Añadir grupo de pintado"))
+                {
+                    paintGroups.Add(new PaintGroup { groupName = GenerateUniqueGroupName() });
+                    InvalidatePainterHierarchy();
+                }
+
+                using (new EditorGUI.DisabledScope(GetPaintRoot(false) == null))
+                {
+                    if (GUILayout.Button("Limpiar instancias pintadas"))
+                    {
+                        ClearPaintedInstances();
+                    }
+                }
             }
+
+            EditorGUILayout.Space();
+
+            for (int i = 0; i < paintGroups.Count; i++)
+            {
+                if (DrawPaintGroup(paintGroups[i], i))
+                {
+                    i--;
+                }
+            }
+
+            if (paintGroups.Count == 0)
+            {
+                DrawMessageCard("Sin grupos", "No hay grupos de pintado definidos. Añade uno para comenzar a colocar personajes VAT.", MessageType.Info);
+            }
+
+            EditorGUILayout.Space();
+
+            painterFocusTarget = (Transform)EditorGUILayout.ObjectField("Objetivo de enfoque", painterFocusTarget, typeof(Transform), true);
+
+            GameObject newSurface = (GameObject)EditorGUILayout.ObjectField("Superficie de pintado", painterSurface, typeof(GameObject), true);
+            if (newSurface != painterSurface)
+            {
+                painterSurface = newSurface;
+                UpdatePaintSurfaceCollider();
+            }
+
+            painterBrushRadius = EditorGUILayout.Slider("Radio del pincel", painterBrushRadius, 0.05f, 25f);
+            painterBrushDensity = EditorGUILayout.IntSlider("Densidad del pincel", painterBrushDensity, 1, 64);
+            painterMinDistance = EditorGUILayout.Slider("Distancia mínima entre instancias", painterMinDistance, 0f, 10f);
+
+            DrawPainterDiagnostics();
+
+            bool requestedMode = GUILayout.Toggle(painterPaintingMode, "Activar modo de pintado", "Button");
+            if (requestedMode != painterPaintingMode)
+            {
+                TogglePaintingMode(requestedMode);
+            }
+
+            if (painterPaintingMode)
+            {
+                DrawMessageCard("Controles en escena", "Haz clic izquierdo en la vista de escena para pintar instancias VAT. Mantén Alt para seguir navegando con la cámara.", MessageType.Info);
+            }
+        }
+
+        private void DrawVatUvVisualSection()
+        {
+            DrawSectionHeader("VAT UV Visual", "Ajusta visualmente las coordenadas UV con una textura guía.");
+
+            DrawMessageCard("Visualizador UV", "Alinea la malla a la textura de referencia moviendo, escalando y rotando el wireframe directamente sobre la vista previa.", MessageType.Info);
+
+            uvVisualReferenceTexture = (Texture2D)EditorGUILayout.ObjectField("Textura de referencia", uvVisualReferenceTexture, typeof(Texture2D), false);
+
+            MeshFilter newTarget = (MeshFilter)EditorGUILayout.ObjectField("Mesh Filter objetivo", uvVisualTargetMeshFilter, typeof(MeshFilter), true);
+            if (newTarget != uvVisualTargetMeshFilter)
+            {
+                uvVisualTargetMeshFilter = newTarget;
+                ResetUvVisualTargetCache();
+                ResetUvVisualTransform();
+            }
+
+            Mesh mesh = GetUvVisualMesh();
+
+            EditorGUILayout.Space();
+
+            uvVisualPosition = EditorGUILayout.Vector2Field("Posición UV", uvVisualPosition);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                Vector2 newScale = EditorGUILayout.Vector2Field("Escala UV", uvVisualScale);
+                if (uvVisualLockUniformScale)
+                {
+                    if (!Mathf.Approximately(newScale.x, uvVisualScale.x))
+                    {
+                        newScale.y = newScale.x;
+                    }
+                    else if (!Mathf.Approximately(newScale.y, uvVisualScale.y))
+                    {
+                        newScale.x = newScale.y;
+                    }
+                }
+
+                uvVisualScale = new Vector2(Mathf.Max(0.001f, newScale.x), Mathf.Max(0.001f, newScale.y));
+
+                bool newLock = GUILayout.Toggle(uvVisualLockUniformScale, new GUIContent("Bloqueo uniforme", "Mantener la misma escala en X y Y"), GUILayout.Width(150f));
+                if (newLock && !uvVisualLockUniformScale)
+                {
+                    uvVisualScale.y = uvVisualScale.x;
+                }
+                uvVisualLockUniformScale = newLock;
+            }
+
+            uvVisualRotation = EditorGUILayout.Slider("Rotación UV (°)", uvVisualRotation, -360f, 360f);
+
+            DrawMessageCard("Controles rápidos", "• Arrastra el wireframe para reposicionarlo.\n• Usa la rueda del ratón mientras arrastras para escalar.\n• Ajusta la rotación desde el control deslizante o restablece con el botón dedicado.", MessageType.Info);
+
+            DrawUvVisualDiagnostics(mesh);
+
+            Rect previewRect = GUILayoutUtility.GetAspectRect(1f, GUILayout.MaxWidth(520f), GUILayout.ExpandWidth(true));
+            DrawUvVisualBackground(previewRect);
+
+            if (uvVisualReferenceTexture != null)
+            {
+                GUI.DrawTexture(previewRect, uvVisualReferenceTexture, ScaleMode.ScaleToFit, true);
+            }
+
+            DrawUvVisualGrid(previewRect);
+            DrawUvVisualPreview(previewRect, mesh);
+            EditorGUIUtility.AddCursorRect(previewRect, uvVisualIsDragging ? MouseCursor.MoveArrow : MouseCursor.Pan);
+
+            EditorGUILayout.Space();
+
+            bool hasValidUvs = mesh != null && uvVisualOriginalUvs != null && uvVisualOriginalUvs.Length > 0;
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                using (new EditorGUI.DisabledScope(!hasValidUvs))
+                {
+                    if (GUILayout.Button("Aplicar transformación UV"))
+                    {
+                        ApplyUvVisualTransform(mesh);
+                    }
+
+                    if (GUILayout.Button("Restaurar UV originales"))
+                    {
+                        UndoUvVisualChanges(mesh);
+                    }
+                }
+
+                if (GUILayout.Button("Restablecer gizmo", GUILayout.Width(160f)))
+                {
+                    ResetUvVisualTransform();
+                    Repaint();
+                }
+            }
+        }
+
+        private void DrawUvVisualDiagnostics(Mesh mesh)
+        {
+            if (uvVisualTargetMeshFilter == null)
+            {
+                DrawMessageCard("Selecciona una malla", "Asigna un Mesh Filter con coordenadas UV para visualizar y transformarlas.", MessageType.Info);
+            }
+            else if (mesh == null)
+            {
+                DrawMessageCard("Malla no válida", "El Mesh Filter seleccionado no tiene una malla compartida.", MessageType.Warning);
+            }
+            else if (mesh.uv == null || mesh.uv.Length == 0)
+            {
+                DrawMessageCard("UV ausentes", "La malla seleccionada no contiene coordenadas UV.", MessageType.Warning);
+            }
+
+            if (uvVisualReferenceTexture == null)
+            {
+                DrawMessageCard("Textura de referencia", "Asigna una textura para visualizar la alineación de las UV (opcional pero recomendado).", MessageType.Info);
+            }
+        }
+
+        private static void DrawUvVisualBackground(Rect rect)
+        {
+            Color baseColor = EditorGUIUtility.isProSkin ? new Color(0.13f, 0.13f, 0.13f, 1f) : new Color(0.95f, 0.95f, 0.95f, 1f);
+            EditorGUI.DrawRect(rect, baseColor);
+
+            Color border = new Color(0.25f, 0.6f, 1f, 0.85f);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 2f), border);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 2f, rect.width, 2f), border);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, 2f, rect.height), border);
+            EditorGUI.DrawRect(new Rect(rect.xMax - 2f, rect.y, 2f, rect.height), border);
+        }
+
+        private static void DrawUvVisualGrid(Rect rect)
+        {
+            Handles.BeginGUI();
+            Color previous = Handles.color;
+            Handles.color = new Color(1f, 1f, 1f, 0.08f);
+
+            const int lines = 8;
+            for (int i = 1; i < lines; i++)
+            {
+                float t = rect.x + rect.width * (i / (float)lines);
+                Handles.DrawLine(new Vector3(t, rect.y), new Vector3(t, rect.yMax));
+
+                float y = rect.y + rect.height * (i / (float)lines);
+                Handles.DrawLine(new Vector3(rect.x, y), new Vector3(rect.xMax, y));
+            }
+
+            Handles.color = previous;
+            Handles.EndGUI();
+        }
+
+        private void DrawUvVisualPreview(Rect rect, Mesh mesh)
+        {
+            if (mesh == null || uvVisualOriginalUvs == null || uvVisualOriginalUvs.Length == 0)
+            {
+                return;
+            }
+
+            int[] triangles = mesh.triangles;
+            if (triangles == null || triangles.Length == 0)
+            {
+                return;
+            }
+
+            Matrix4x4 previewMatrix = Matrix4x4.TRS(uvVisualPosition, Quaternion.Euler(0f, 0f, uvVisualRotation), uvVisualScale);
+
+            Handles.BeginGUI();
+            Color previous = Handles.color;
+            Color fillColor = new Color(0f, 0.78f, 1f, 0.22f);
+            Color outlineColor = new Color(0f, 0.95f, 1f, 0.85f);
+
+            Handles.color = fillColor;
+
+            for (int i = 0; i < triangles.Length; i += 3)
+            {
+                Vector2 uvA = uvVisualOriginalUvs[triangles[i]];
+                Vector2 uvB = uvVisualOriginalUvs[triangles[i + 1]];
+                Vector2 uvC = uvVisualOriginalUvs[triangles[i + 2]];
+
+                Vector3 transformedA = previewMatrix.MultiplyPoint3x4(new Vector3(uvA.x, uvA.y, 0f));
+                Vector3 transformedB = previewMatrix.MultiplyPoint3x4(new Vector3(uvB.x, uvB.y, 0f));
+                Vector3 transformedC = previewMatrix.MultiplyPoint3x4(new Vector3(uvC.x, uvC.y, 0f));
+
+                Vector2 a = UvVisualUvToScreen(new Vector2(transformedA.x, transformedA.y), rect);
+                Vector2 b = UvVisualUvToScreen(new Vector2(transformedB.x, transformedB.y), rect);
+                Vector2 c = UvVisualUvToScreen(new Vector2(transformedC.x, transformedC.y), rect);
+
+                Handles.DrawAAConvexPolygon(a, b, c);
+                Handles.color = outlineColor;
+                Handles.DrawAAPolyLine(2f, a, b, c, a);
+                Handles.color = fillColor;
+            }
+
+            Vector3 pivot = previewMatrix.MultiplyPoint3x4(Vector3.zero);
+            Vector3 axisX = previewMatrix.MultiplyPoint3x4(new Vector3(0.2f, 0f, 0f));
+            Vector3 axisY = previewMatrix.MultiplyPoint3x4(new Vector3(0f, 0.2f, 0f));
+
+            Vector2 pivotScreen = UvVisualUvToScreen(new Vector2(pivot.x, pivot.y), rect);
+            Vector2 axisXScreen = UvVisualUvToScreen(new Vector2(axisX.x, axisX.y), rect);
+            Vector2 axisYScreen = UvVisualUvToScreen(new Vector2(axisY.x, axisY.y), rect);
+
+            Handles.color = new Color(1f, 0.35f, 0.35f, 0.9f);
+            Handles.DrawAAPolyLine(3f, pivotScreen, axisXScreen);
+            Handles.color = new Color(0.35f, 1f, 0.5f, 0.9f);
+            Handles.DrawAAPolyLine(3f, pivotScreen, axisYScreen);
+
+            Handles.color = previous;
+            Handles.EndGUI();
+
+            HandleUvVisualInput(rect, previewMatrix);
+        }
+
+        private void HandleUvVisualInput(Rect rect, Matrix4x4 previewMatrix)
+        {
+            Event e = Event.current;
+            if (e == null)
+            {
+                return;
+            }
+
+            Vector2 mouseUv = UvVisualScreenToUv(e.mousePosition, rect);
+
+            switch (e.type)
+            {
+                case EventType.MouseDown:
+                    if (e.button == 0 && rect.Contains(e.mousePosition) && IsMouseNearAnyTransformedUv(mouseUv, previewMatrix))
+                    {
+                        uvVisualIsDragging = true;
+                        uvVisualDragStartMousePos = e.mousePosition;
+                        uvVisualDragStartUvPos = uvVisualPosition;
+                        GUI.FocusControl(null);
+                        e.Use();
+                    }
+                    break;
+                case EventType.MouseDrag:
+                    if (uvVisualIsDragging)
+                    {
+                        Vector2 deltaPixels = e.mousePosition - uvVisualDragStartMousePos;
+                        Vector2 deltaUv = new Vector2(deltaPixels.x / rect.width, -deltaPixels.y / rect.height);
+                        uvVisualPosition = uvVisualDragStartUvPos + deltaUv;
+                        Repaint();
+                        e.Use();
+                    }
+                    break;
+                case EventType.MouseUp:
+                    if (uvVisualIsDragging && e.button == 0)
+                    {
+                        uvVisualIsDragging = false;
+                        e.Use();
+                    }
+                    break;
+                case EventType.ScrollWheel:
+                    if (uvVisualIsDragging && rect.Contains(e.mousePosition))
+                    {
+                        float scroll = -e.delta.y;
+                        float scaleFactor = 1f + (scroll * 0.05f);
+
+                        if (uvVisualLockUniformScale)
+                        {
+                            uvVisualScale *= scaleFactor;
+                        }
+                        else
+                        {
+                            uvVisualScale.x *= scaleFactor;
+                            uvVisualScale.y *= scaleFactor;
+                        }
+
+                        uvVisualScale.x = Mathf.Clamp(uvVisualScale.x, 0.01f, 100f);
+                        uvVisualScale.y = Mathf.Clamp(uvVisualScale.y, 0.01f, 100f);
+
+                        Repaint();
+                        e.Use();
+                    }
+                    break;
+            }
+        }
+
+        private bool IsMouseNearAnyTransformedUv(Vector2 mouseUv, Matrix4x4 previewMatrix)
+        {
+            if (uvVisualOriginalUvs == null || uvVisualOriginalUvs.Length == 0)
+            {
+                return false;
+            }
+
+            const float threshold = 0.05f;
+            for (int i = 0; i < uvVisualOriginalUvs.Length; i++)
+            {
+                Vector2 uv = uvVisualOriginalUvs[i];
+                Vector3 transformed = previewMatrix.MultiplyPoint3x4(new Vector3(uv.x, uv.y, 0f));
+                Vector2 transformed2D = new Vector2(transformed.x, transformed.y);
+
+                if (Vector2.Distance(transformed2D, mouseUv) < threshold)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void ResetUvVisualTargetCache()
+        {
+            uvVisualLastMesh = null;
+            uvVisualOriginalUvs = null;
+            uvVisualInitialUvs = null;
+            uvVisualIsDragging = false;
+        }
+
+        private void ResetUvVisualTransform()
+        {
+            uvVisualPosition = Vector2.zero;
+            uvVisualScale = Vector2.one;
+            uvVisualRotation = 0f;
+        }
+
+        private Mesh GetUvVisualMesh()
+        {
+            if (uvVisualTargetMeshFilter == null)
+            {
+                return null;
+            }
+
+            Mesh mesh = uvVisualTargetMeshFilter.sharedMesh;
+            if (mesh == null)
+            {
+                return null;
+            }
+
+            Vector2[] meshUvs = mesh.uv;
+            if (meshUvs == null || meshUvs.Length == 0)
+            {
+                uvVisualOriginalUvs = null;
+                return mesh;
+            }
+
+            if (uvVisualLastMesh != mesh || uvVisualOriginalUvs == null || uvVisualOriginalUvs.Length != meshUvs.Length)
+            {
+                uvVisualOriginalUvs = (Vector2[])meshUvs.Clone();
+                uvVisualInitialUvs = (Vector2[])meshUvs.Clone();
+                uvVisualLastMesh = mesh;
+            }
+
+            return mesh;
+        }
+
+        private void ApplyUvVisualTransform(Mesh mesh)
+        {
+            mesh ??= GetUvVisualMesh();
+            if (mesh == null)
+            {
+                ReportStatus("Selecciona un Mesh Filter válido para aplicar la transformación UV.", MessageType.Warning);
+                return;
+            }
+
+            if (uvVisualOriginalUvs == null || uvVisualOriginalUvs.Length == 0)
+            {
+                ReportStatus("La malla seleccionada no contiene coordenadas UV transformables.", MessageType.Warning);
+                return;
+            }
+
+            Vector2[] transformed = (Vector2[])uvVisualOriginalUvs.Clone();
+            Matrix4x4 transformMatrix = Matrix4x4.TRS(uvVisualPosition, Quaternion.Euler(0f, 0f, uvVisualRotation), uvVisualScale);
+
+            Undo.RecordObject(mesh, "Aplicar transformación UV");
+
+            for (int i = 0; i < transformed.Length; i++)
+            {
+                Vector3 result = transformMatrix.MultiplyPoint3x4(new Vector3(transformed[i].x, transformed[i].y, 0f));
+                transformed[i] = new Vector2(result.x, result.y);
+            }
+
+            mesh.uv = transformed;
+            EditorUtility.SetDirty(mesh);
+
+            uvVisualOriginalUvs = (Vector2[])transformed.Clone();
+
+            ReportStatus("Transformación UV aplicada correctamente.", MessageType.Info);
+        }
+
+        private void UndoUvVisualChanges(Mesh mesh)
+        {
+            mesh ??= GetUvVisualMesh();
+            if (mesh == null)
+            {
+                ReportStatus("No hay una malla válida para restaurar.", MessageType.Warning);
+                return;
+            }
+
+            if (uvVisualInitialUvs == null || uvVisualInitialUvs.Length == 0)
+            {
+                ReportStatus("No se ha guardado un estado original de UV para esta malla.", MessageType.Warning);
+                return;
+            }
+
+            Undo.RecordObject(mesh, "Restaurar UV originales");
+            Vector2[] restored = (Vector2[])uvVisualInitialUvs.Clone();
+            mesh.uv = restored;
+            EditorUtility.SetDirty(mesh);
+
+            uvVisualOriginalUvs = (Vector2[])restored.Clone();
+
+            ReportStatus("UV restauradas a su estado original.", MessageType.Info);
+        }
+
+        private static Vector2 UvVisualScreenToUv(Vector2 screenPosition, Rect rect)
+        {
+            float x = (screenPosition.x - rect.x) / rect.width;
+            float y = 1f - ((screenPosition.y - rect.y) / rect.height);
+            return new Vector2(x, y);
+        }
+
+        private static Vector2 UvVisualUvToScreen(Vector2 uv, Rect rect)
+        {
+            return new Vector2(rect.x + uv.x * rect.width, rect.y + (1f - uv.y) * rect.height);
+        }
+
+        private string GenerateUniqueGroupName()
+        {
+            const string baseName = "Paint Group";
+            int index = paintGroups.Count + 1;
+
+            while (true)
+            {
+                string candidate = $"{baseName} {index}";
+                bool exists = false;
+
+                foreach (PaintGroup group in paintGroups)
+                {
+                    if (string.Equals(group.groupName, candidate, StringComparison.OrdinalIgnoreCase))
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+
+                if (!exists)
+                {
+                    return candidate;
+                }
+
+                index++;
+            }
+        }
+
+        private bool DrawPaintGroup(PaintGroup group, int index)
+        {
+            bool removeGroup = false;
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            EditorGUILayout.BeginHorizontal();
+            group.isExpanded = EditorGUILayout.Foldout(group.isExpanded, group.groupName, true);
+            if (GUILayout.Button("Eliminar", GUILayout.Width(70f)))
+            {
+                removeGroup = true;
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (group.isExpanded)
+            {
+                EditorGUI.indentLevel++;
+
+                string newName = EditorGUILayout.TextField("Nombre del grupo", group.groupName);
+                if (!string.Equals(newName, group.groupName, StringComparison.Ordinal))
+                {
+                    group.groupName = newName;
+                    InvalidatePainterHierarchy(group);
+                }
+
+                DrawMeshFilterList(group);
+                DrawMaterialList(group);
+
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.EndVertical();
+
+            if (removeGroup)
+            {
+                InvalidatePainterHierarchy(group);
+                paintGroupParents.Remove(group);
+                paintGroups.RemoveAt(index);
+                return true;
+            }
+
+            return false;
+        }
+
+        private void DrawMeshFilterList(PaintGroup group)
+        {
+            EditorGUILayout.LabelField("Mesh Filters (mallas origen)", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            for (int i = 0; i < group.meshFilters.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                group.meshFilters[i] = (MeshFilter)EditorGUILayout.ObjectField(group.meshFilters[i], typeof(MeshFilter), true);
+                if (GUILayout.Button("X", GUILayout.Width(24f)))
+                {
+                    group.meshFilters.RemoveAt(i);
+                    i--;
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Añadir Mesh Filter"))
+                {
+                    group.meshFilters.Add(null);
+                }
+
+                if (GUILayout.Button("Añadir selección"))
+                {
+                    AddSelectedMeshFilters(group);
+                }
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawMaterialList(PaintGroup group)
+        {
+            EditorGUILayout.LabelField("Materiales VAT", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            for (int i = 0; i < group.vatMaterials.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                group.vatMaterials[i] = (Material)EditorGUILayout.ObjectField(group.vatMaterials[i], typeof(Material), false);
+                if (GUILayout.Button("X", GUILayout.Width(24f)))
+                {
+                    group.vatMaterials.RemoveAt(i);
+                    i--;
+                    InvalidatePainterHierarchy(group);
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Añadir material"))
+                {
+                    group.vatMaterials.Add(null);
+                    InvalidatePainterHierarchy(group);
+                }
+
+                if (GUILayout.Button("Añadir selección"))
+                {
+                    if (AddSelectedMaterials(group))
+                    {
+                        InvalidatePainterHierarchy(group);
+                    }
+                }
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        private void AddSelectedMeshFilters(PaintGroup group)
+        {
+            GameObject[] selectedObjects = Selection.gameObjects;
+            bool added = false;
+
+            foreach (GameObject go in selectedObjects)
+            {
+                if (go == null)
+                {
+                    continue;
+                }
+
+                MeshFilter filter = go.GetComponent<MeshFilter>();
+                if (filter != null && !group.meshFilters.Contains(filter))
+                {
+                    group.meshFilters.Add(filter);
+                    added = true;
+                }
+            }
+
+            if (added)
+            {
+                Repaint();
+            }
+        }
+
+        private bool AddSelectedMaterials(PaintGroup group)
+        {
+            bool added = false;
+
+            foreach (UnityEngine.Object obj in Selection.objects)
+            {
+                if (obj is Material material && !group.vatMaterials.Contains(material))
+                {
+                    group.vatMaterials.Add(material);
+                    added = true;
+                }
+            }
+
+            if (!added)
+            {
+                foreach (GameObject go in Selection.gameObjects)
+                {
+                    if (go == null)
+                    {
+                        continue;
+                    }
+
+                    Renderer renderer = go.GetComponent<Renderer>();
+                    if (renderer == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (Material shared in renderer.sharedMaterials)
+                    {
+                        if (shared != null && !group.vatMaterials.Contains(shared))
+                        {
+                            group.vatMaterials.Add(shared);
+                            added = true;
+                        }
+                    }
+                }
+            }
+
+            if (added)
+            {
+                Repaint();
+            }
+
+            return added;
+        }
+
+        private void DrawPainterDiagnostics()
+        {
+            if (painterSurface == null)
+            {
+                DrawMessageCard("Superficie pendiente", "Asigna una superficie de pintado con MeshCollider para recibir los trazos del pincel.", MessageType.Info);
+            }
+            else if (painterSurfaceCollider == null)
+            {
+                DrawMessageCard("MeshCollider requerido", "La superficie seleccionada no incluye un componente MeshCollider.", MessageType.Warning);
+            }
+
+            if (!HasAnyValidPaintGroup())
+            {
+                DrawMessageCard("Configura tus grupos", "Crea al menos un grupo con Mesh Filters y materiales VAT válidos para comenzar a pintar.", MessageType.Warning);
+            }
+
+            if (painterFocusTarget == null)
+            {
+                DrawMessageCard("Objetivo de enfoque", "Asigna un objetivo para orientar las instancias pintadas. Sin él conservarán su orientación original.", MessageType.Info);
+            }
+        }
+
+        private void InvalidatePainterHierarchy(PaintGroup group = null)
+        {
+            if (group == null)
+            {
+                paintGroupParents.Clear();
+                return;
+            }
+
+            paintGroupParents.Remove(group);
+        }
+
+        private void UpdatePaintSurfaceCollider()
+        {
+            painterSurfaceCollider = painterSurface != null ? painterSurface.GetComponent<MeshCollider>() : null;
+        }
+
+        private GameObject GetPaintRoot(bool createIfMissing)
+        {
+            if (painterRoot != null)
+            {
+                return painterRoot;
+            }
+
+            painterRoot = GameObject.Find(k_PaintRootName);
+            if (painterRoot == null && createIfMissing)
+            {
+                painterRoot = new GameObject(k_PaintRootName);
+                Undo.RegisterCreatedObjectUndo(painterRoot, "Crear raíz de pintado VAT");
+            }
+
+            return painterRoot;
+        }
+
+        private void ClearPaintedInstances()
+        {
+            GameObject root = GetPaintRoot(false);
+            if (root == null)
+            {
+                return;
+            }
+
+            Undo.DestroyObjectImmediate(root);
+            painterRoot = null;
+            paintGroupParents.Clear();
+        }
+
+        private void TogglePaintingMode(bool enable)
+        {
+            if (painterPaintingMode == enable)
+            {
+                return;
+            }
+
+            painterPaintingMode = enable;
+
+            if (enable)
+            {
+                UpdatePaintSurfaceCollider();
+                SceneView.duringSceneGui += HandlePainterSceneGUI;
+            }
+            else
+            {
+                SceneView.duringSceneGui -= HandlePainterSceneGUI;
+                painterRoot = null;
+                paintGroupParents.Clear();
+            }
+
+            SceneView.RepaintAll();
+        }
+
+        private bool PainterHasValidSetup()
+        {
+            return painterSurfaceCollider != null && HasAnyValidPaintGroup();
+        }
+
+        private void HandlePainterSceneGUI(SceneView sceneView)
+        {
+            if (!painterPaintingMode)
+            {
+                return;
+            }
+
+            Event current = Event.current;
+            if (current == null)
+            {
+                return;
+            }
+
+            if (current.type == EventType.Layout)
+            {
+                HandleUtility.AddDefaultControl(GUIUtility.GetControlID(FocusType.Passive));
+            }
+
+            if (!PainterHasValidSetup())
+            {
+                return;
+            }
+
+            Ray guiRay = HandleUtility.GUIPointToWorldRay(current.mousePosition);
+            if (!TryGetPaintHit(guiRay, out RaycastHit hit))
+            {
+                return;
+            }
+
+            DrawBrushPreview(hit);
+
+            if (current.alt)
+            {
+                return;
+            }
+
+            bool shouldPaint = (current.type == EventType.MouseDown || current.type == EventType.MouseDrag) && current.button == 0;
+            if (shouldPaint && PaintAtRayHit(hit))
+            {
+                current.Use();
+            }
+        }
+
+        private bool TryGetPaintHit(Ray ray, out RaycastHit hit)
+        {
+            if (painterSurfaceCollider != null)
+            {
+                return painterSurfaceCollider.Raycast(ray, out hit, 10000f);
+            }
+
+            hit = default;
+            return false;
+        }
+
+        private void DrawBrushPreview(RaycastHit hit)
+        {
+            Handles.zTest = UnityEngine.Rendering.CompareFunction.LessEqual;
+            Handles.color = k_BrushFillColor;
+            Handles.DrawSolidDisc(hit.point, hit.normal, painterBrushRadius);
+            Handles.color = k_BrushOutlineColor;
+            Handles.DrawWireDisc(hit.point, hit.normal, painterBrushRadius);
+        }
+
+        private static void BuildBrushFrame(Vector3 normal, out Vector3 tangent, out Vector3 bitangent)
+        {
+            tangent = Vector3.Cross(normal, Vector3.up);
+            if (tangent.sqrMagnitude < 1e-6f)
+            {
+                tangent = Vector3.Cross(normal, Vector3.right);
+            }
+
+            tangent.Normalize();
+            bitangent = Vector3.Cross(normal, tangent).normalized;
+        }
+
+        private bool PaintAtRayHit(RaycastHit hit)
+        {
+            bool paintedAny = false;
+
+            BuildBrushFrame(hit.normal, out Vector3 tangent, out Vector3 bitangent);
+
+            for (int i = 0; i < painterBrushDensity; i++)
+            {
+                Vector2 offset = UnityEngine.Random.insideUnitCircle * painterBrushRadius;
+                Vector3 samplePoint = hit.point + tangent * offset.x + bitangent * offset.y;
+                Ray offsetRay = new Ray(samplePoint + hit.normal * 0.5f, -hit.normal);
+
+                if (!TryGetPaintHit(offsetRay, out RaycastHit offsetHit))
+                {
+                    continue;
+                }
+
+                if (painterMinDistance > 0f && IsTooClose(offsetHit.point))
+                {
+                    continue;
+                }
+
+                if (PaintInstanceAt(offsetHit.point, offsetHit.normal))
+                {
+                    paintedAny = true;
+                }
+            }
+
+            if (paintedAny)
+            {
+                SceneView.RepaintAll();
+            }
+
+            return paintedAny;
+        }
+
+        private bool PaintInstanceAt(Vector3 position, Vector3 normal)
+        {
+            PaintGroup group = GetRandomValidGroup();
+            if (group == null)
+            {
+                return false;
+            }
+
+            MeshFilter meshFilter = GetRandomMeshFilter(group);
+            if (meshFilter == null)
+            {
+                return false;
+            }
+
+            Material material = GetRandomMaterial(group, out int materialIndex);
+            if (material == null)
+            {
+                return false;
+            }
+
+            GameObject instance = CreateInstanceFromSource(meshFilter.gameObject);
+            if (instance == null)
+            {
+                return false;
+            }
+
+            Undo.RegisterCreatedObjectUndo(instance, "Pintar instancia VAT");
+            instance.transform.position = position;
+
+            AlignPaintedInstance(instance.transform, position, normal);
+
+            MeshRenderer renderer = instance.GetComponent<MeshRenderer>();
+            if (renderer != null)
+            {
+                Undo.RecordObject(renderer, "Asignar material VAT");
+                renderer.sharedMaterial = material;
+            }
+
+            Transform parent = GetOrCreateGroupParent(group, materialIndex);
+            if (parent != null)
+            {
+                Undo.SetTransformParent(instance.transform, parent, "Asignar contenedor de pintado");
+                instance.transform.position = position;
+            }
+
+            return true;
+        }
+
+        private PaintGroup GetRandomValidGroup()
+        {
+            reusablePaintGroups.Clear();
+
+            foreach (PaintGroup group in paintGroups)
+            {
+                if (GroupHasValidMesh(group) && GroupHasValidMaterial(group))
+                {
+                    reusablePaintGroups.Add(group);
+                }
+            }
+
+            if (reusablePaintGroups.Count == 0)
+            {
+                return null;
+            }
+
+            int selected = UnityEngine.Random.Range(0, reusablePaintGroups.Count);
+            return reusablePaintGroups[selected];
+        }
+
+        private MeshFilter GetRandomMeshFilter(PaintGroup group)
+        {
+            reusableMeshFilterIndices.Clear();
+
+            for (int i = 0; i < group.meshFilters.Count; i++)
+            {
+                if (group.meshFilters[i] != null)
+                {
+                    reusableMeshFilterIndices.Add(i);
+                }
+            }
+
+            if (reusableMeshFilterIndices.Count == 0)
+            {
+                return null;
+            }
+
+            int selected = reusableMeshFilterIndices[UnityEngine.Random.Range(0, reusableMeshFilterIndices.Count)];
+            return group.meshFilters[selected];
+        }
+
+        private Material GetRandomMaterial(PaintGroup group, out int materialIndex)
+        {
+            reusableMaterialIndices.Clear();
+
+            for (int i = 0; i < group.vatMaterials.Count; i++)
+            {
+                if (group.vatMaterials[i] != null)
+                {
+                    reusableMaterialIndices.Add(i);
+                }
+            }
+
+            if (reusableMaterialIndices.Count == 0)
+            {
+                materialIndex = -1;
+                return null;
+            }
+
+            materialIndex = reusableMaterialIndices[UnityEngine.Random.Range(0, reusableMaterialIndices.Count)];
+            return group.vatMaterials[materialIndex];
+        }
+
+        private GameObject CreateInstanceFromSource(GameObject source)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            GameObject instance = null;
+
+            if (PrefabUtility.IsPartOfPrefabAsset(source))
+            {
+                instance = PrefabUtility.InstantiatePrefab(source) as GameObject;
+            }
+            else if (PrefabUtility.IsPartOfPrefabInstance(source))
+            {
+                GameObject prefabRoot = PrefabUtility.GetCorrespondingObjectFromSource(source);
+                if (prefabRoot != null)
+                {
+                    instance = PrefabUtility.InstantiatePrefab(prefabRoot) as GameObject;
+                }
+            }
+
+            if (instance == null)
+            {
+                instance = UnityEngine.Object.Instantiate(source);
+            }
+
+            if (instance != null)
+            {
+                instance.name = source.name;
+            }
+
+            return instance;
+        }
+
+        private void AlignPaintedInstance(Transform instanceTransform, Vector3 position, Vector3 surfaceNormal)
+        {
+            if (instanceTransform == null)
+            {
+                return;
+            }
+
+            Quaternion rotation = Quaternion.identity;
+
+            if (painterFocusTarget != null)
+            {
+                Bounds bounds = GetFocusTargetBounds();
+                Vector3 lookAtPoint = bounds.ClosestPoint(position);
+                Vector3 direction = lookAtPoint - position;
+                direction.y = 0f;
+
+                if (direction.sqrMagnitude > 1e-4f)
+                {
+                    rotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
+                }
+            }
+
+            if (rotation == Quaternion.identity)
+            {
+                rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+            }
+
+            Quaternion normalAlignment = Quaternion.FromToRotation(Vector3.up, surfaceNormal);
+            instanceTransform.rotation = normalAlignment * rotation;
+        }
+
+        private Bounds GetFocusTargetBounds()
+        {
+            if (painterFocusTarget == null)
+            {
+                return new Bounds(Vector3.zero, Vector3.one);
+            }
+
+            Renderer[] renderers = painterFocusTarget.GetComponentsInChildren<Renderer>();
+            if (renderers.Length > 0)
+            {
+                Bounds combined = renderers[0].bounds;
+                for (int i = 1; i < renderers.Length; i++)
+                {
+                    combined.Encapsulate(renderers[i].bounds);
+                }
+
+                return combined;
+            }
+
+            return new Bounds(painterFocusTarget.position, Vector3.one);
+        }
+
+        private bool IsTooClose(Vector3 point)
+        {
+            GameObject root = GetPaintRoot(false);
+            if (root == null)
+            {
+                return false;
+            }
+
+            foreach (Transform child in root.GetComponentsInChildren<Transform>())
+            {
+                if (child == null || child == root.transform)
+                {
+                    continue;
+                }
+
+                if (child.GetComponent<MeshRenderer>() == null && child.GetComponent<MeshFilter>() == null)
+                {
+                    continue;
+                }
+
+                if (Vector3.Distance(child.position, point) < painterMinDistance)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private Transform GetOrCreateGroupParent(PaintGroup group, int materialIndex)
+        {
+            GameObject root = GetPaintRoot(true);
+            if (root == null)
+            {
+                return null;
+            }
+
+            if (!paintGroupParents.TryGetValue(group, out List<Transform> parents))
+            {
+                parents = new List<Transform>();
+                paintGroupParents[group] = parents;
+            }
+
+            while (parents.Count <= materialIndex)
+            {
+                parents.Add(null);
+            }
+
+            string suffix = $"_{materialIndex + 1}_{group.id}";
+            string baseName = string.IsNullOrWhiteSpace(group.groupName) ? "Group" : group.groupName.Trim();
+            string targetName = $"{baseName}{suffix}";
+
+            Transform parent = parents[materialIndex];
+            if (parent == null)
+            {
+                parent = FindChildBySuffix(root.transform, suffix);
+                if (parent == null)
+                {
+                    GameObject container = new GameObject(targetName);
+                    Undo.RegisterCreatedObjectUndo(container, "Crear contenedor de grupo VAT");
+                    container.transform.SetParent(root.transform, false);
+                    parent = container.transform;
+                }
+            }
+
+            parent.name = targetName;
+            parent.SetParent(root.transform, false);
+            parents[materialIndex] = parent;
+
+            return parent;
+        }
+
+        private static Transform FindChildBySuffix(Transform root, string suffix)
+        {
+            if (root == null)
+            {
+                return null;
+            }
+
+            foreach (Transform child in root)
+            {
+                if (child != null && child.name.EndsWith(suffix, StringComparison.Ordinal))
+                {
+                    return child;
+                }
+            }
+
+            return null;
+        }
+
+        private bool HasAnyValidPaintGroup()
+        {
+            foreach (PaintGroup group in paintGroups)
+            {
+                if (GroupHasValidMesh(group) && GroupHasValidMaterial(group))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool GroupHasValidMesh(PaintGroup group)
+        {
+            foreach (MeshFilter filter in group.meshFilters)
+            {
+                if (filter != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool GroupHasValidMaterial(PaintGroup group)
+        {
+            foreach (Material material in group.vatMaterials)
+            {
+                if (material != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool CanBake()
@@ -118,29 +1621,15 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     DragAndDrop.AcceptDrag();
 
-                    foreach (string draggedPath in DragAndDrop.paths)
+                    bool assigned = TryAssignOutputPathFromPaths(DragAndDrop.paths) ||
+                                     TryAssignOutputPathFromObjectReferences(DragAndDrop.objectReferences);
+
+                    if (!assigned)
                     {
-                        if (Directory.Exists(draggedPath))
-                        {
-                            string projectRelativePath = ConvertToProjectRelativePath(draggedPath);
-                            if (!string.IsNullOrEmpty(projectRelativePath))
-                            {
-                                outputPath = projectRelativePath;
-                                Repaint();
-                            }
-                            else
-                            {
-                                ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
-                            }
-
-                            if (!assigned)
-                            {
-                                ReportStatus("Dragged folder must be inside the project's Assets directory.", MessageType.Error);
-                            }
-                        }
-
-                        current.Use();
+                        ReportStatus("La carpeta arrastrada debe estar dentro de la carpeta Assets del proyecto.", MessageType.Error);
                     }
+
+                    current.Use();
                 }
             }
         }
@@ -330,27 +1819,27 @@ namespace JaimeCamacho.VAT.Editor
             SkinnedMeshRenderer skin = targetObject.GetComponentInChildren<SkinnedMeshRenderer>();
             if (skin == null)
             {
-                ReportStatus("No SkinnedMeshRenderer found on the target object.", MessageType.Error);
+                ReportStatus("No se encontró un SkinnedMeshRenderer en el objeto seleccionado.", MessageType.Error);
                 return;
             }
 
             if (skin.sharedMesh == null)
             {
-                ReportStatus("The SkinnedMeshRenderer on the target object does not have a shared mesh assigned.", MessageType.Error);
+                ReportStatus("El SkinnedMeshRenderer del objeto seleccionado no tiene una malla asignada.", MessageType.Error);
                 return;
             }
 
             Animator animator = targetObject.GetComponent<Animator>();
             if (animator == null || animator.runtimeAnimatorController == null)
             {
-                ReportStatus("No Animator with a RuntimeAnimatorController found on the target object.", MessageType.Error);
+                ReportStatus("No se encontró un Animator con RuntimeAnimatorController en el objeto seleccionado.", MessageType.Error);
                 return;
             }
 
             AnimationClip[] clips = animator.runtimeAnimatorController.animationClips;
             if (clips == null || clips.Length == 0)
             {
-                ReportStatus("No animation clips found on the target object's Animator.", MessageType.Warning);
+                ReportStatus("El Animator del objeto seleccionado no contiene clips de animación.", MessageType.Warning);
                 return;
             }
 
@@ -358,7 +1847,7 @@ namespace JaimeCamacho.VAT.Editor
 
             try
             {
-                ReportStatus("Baking VAT position textures...", MessageType.Info, false);
+                ReportStatus("Horneando texturas de posición VAT...", MessageType.Info, false);
                 int vertexCount = skin.sharedMesh.vertexCount;
                 int kernel = infoTexGen.FindKernel(k_KernelName);
                 infoTexGen.GetKernelThreadGroupSizes(kernel, out uint threadSizeX, out uint threadSizeY, out _);
@@ -429,7 +1918,7 @@ namespace JaimeCamacho.VAT.Editor
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
 
-            ReportStatus($"VAT position texture baking completed. Generated assets in '{outputPath}'.", MessageType.Info);
+            ReportStatus($"Horneado de texturas VAT completado. Recursos generados en '{outputPath}'.", MessageType.Info);
         }
 
         private bool ValidateInputs()
@@ -439,32 +1928,32 @@ namespace JaimeCamacho.VAT.Editor
                 TryAssignDefaultComputeShader();
                 if (infoTexGen == null)
                 {
-                    ReportStatus("Compute Shader is not assigned.", MessageType.Error);
+                    ReportStatus("No se asignó un Compute Shader.", MessageType.Error);
                     return false;
                 }
             }
 
             if (!infoTexGen.HasKernel(k_KernelName))
             {
-                ReportStatus($"Compute Shader does not contain a kernel named '{k_KernelName}'.", MessageType.Error);
+                ReportStatus($"El Compute Shader no contiene un kernel llamado '{k_KernelName}'.", MessageType.Error);
                 return false;
             }
 
             if (targetObject == null)
             {
-                ReportStatus("Target Object is not assigned.", MessageType.Error);
+                ReportStatus("No se asignó un objeto de destino.", MessageType.Error);
                 return false;
             }
 
             if (string.IsNullOrEmpty(outputPath))
             {
-                ReportStatus("Output path cannot be empty.", MessageType.Error);
+                ReportStatus("La ruta de salida no puede estar vacía.", MessageType.Error);
                 return false;
             }
 
             if (!outputPath.StartsWith("Assets"))
             {
-                ReportStatus("Output path must be inside the project's Assets directory.", MessageType.Error);
+                ReportStatus("La ruta de salida debe estar dentro de la carpeta Assets del proyecto.", MessageType.Error);
                 return false;
             }
 
@@ -476,14 +1965,14 @@ namespace JaimeCamacho.VAT.Editor
             string projectRoot = Path.GetDirectoryName(Application.dataPath);
             if (string.IsNullOrEmpty(projectRoot))
             {
-                ReportStatus("Unable to determine the project root path.", MessageType.Error);
+                ReportStatus("No se pudo determinar la ruta raíz del proyecto.", MessageType.Error);
                 return false;
             }
 
             string absolutePath = Path.Combine(projectRoot, outputPath);
             if (string.IsNullOrEmpty(absolutePath))
             {
-                ReportStatus("Failed to resolve the output directory.", MessageType.Error);
+                ReportStatus("No se pudo resolver el directorio de salida.", MessageType.Error);
                 return false;
             }
 
@@ -531,38 +2020,38 @@ namespace JaimeCamacho.VAT.Editor
             SkinnedMeshRenderer skin = targetObject.GetComponentInChildren<SkinnedMeshRenderer>();
             if (skin == null)
             {
-                EditorGUILayout.HelpBox("The selected object does not contain a SkinnedMeshRenderer. A skinned mesh is required to bake vertex animation textures.", MessageType.Warning);
+                DrawMessageCard("Skinned Mesh requerido", "El objeto seleccionado no contiene un SkinnedMeshRenderer. Necesitas una malla esquelética para hornear VAT.", MessageType.Warning);
             }
             else if (skin.sharedMesh == null)
             {
-                EditorGUILayout.HelpBox("The detected SkinnedMeshRenderer does not have a shared mesh assigned.", MessageType.Warning);
+                DrawMessageCard("Malla ausente", "El SkinnedMeshRenderer detectado no tiene una malla asignada.", MessageType.Warning);
             }
             else
             {
-                EditorGUILayout.HelpBox($"Skinned mesh detected: {skin.sharedMesh.name} ({skin.sharedMesh.vertexCount} vertices).", MessageType.Info);
+                DrawMessageCard("Malla lista", $"Skinned mesh detectada: {skin.sharedMesh.name} ({skin.sharedMesh.vertexCount} vértices).", MessageType.Info);
             }
 
             Animator animator = targetObject.GetComponent<Animator>();
             if (animator == null)
             {
-                EditorGUILayout.HelpBox("The selected object does not contain an Animator component. Add one to sample animations.", MessageType.Warning);
+                DrawMessageCard("Animator requerido", "El objeto seleccionado no contiene un componente Animator. Añade uno para muestrear las animaciones.", MessageType.Warning);
                 return;
             }
 
             if (animator.runtimeAnimatorController == null)
             {
-                EditorGUILayout.HelpBox("The Animator does not have a RuntimeAnimatorController assigned.", MessageType.Warning);
+                DrawMessageCard("Controlador faltante", "El Animator no tiene asignado un RuntimeAnimatorController.", MessageType.Warning);
                 return;
             }
 
             AnimationClip[] clips = animator.runtimeAnimatorController.animationClips;
             if (clips == null || clips.Length == 0)
             {
-                EditorGUILayout.HelpBox("The Animator controller does not expose any animation clips to bake.", MessageType.Warning);
+                DrawMessageCard("Sin clips", "El controlador de Animator no expone clips de animación para hornear.", MessageType.Warning);
             }
             else
             {
-                EditorGUILayout.HelpBox($"Animator ready: {clips.Length} animation clip(s) detected.", MessageType.Info);
+                DrawMessageCard("Animator listo", $"Clips detectados: {clips.Length}.", MessageType.Info);
             }
         }
 
@@ -598,6 +2087,7 @@ namespace JaimeCamacho.VAT.Editor
         {
             statusMessage = message;
             statusMessageType = type;
+            statusMessageTab = (ToolTab)activeTabIndex;
 
             if (logToConsole)
             {
