@@ -380,10 +380,10 @@ namespace JaimeCamacho.VAT.Editor
 
             DrawMessageCard("Flujo de trabajo", "Genera texturas de posición VAT para cada clip de animación del Animator del objeto seleccionado. Asegúrate de que la ruta de salida permanezca dentro de Assets.", MessageType.Info);
 
-            infoTexGen = (ComputeShader)EditorGUILayout.ObjectField("Compute Shader", infoTexGen, typeof(ComputeShader), false);
+            TryAssignDefaultComputeShader();
             if (infoTexGen == null)
             {
-                DrawMessageCard("Shader sugerido", $"Si lo dejas vacío, la herramienta intentará usar \"{k_DefaultComputeShaderName}\" automáticamente.", MessageType.Info);
+                DrawMessageCard("Shader requerido", $"No se encontró el compute shader interno \"{k_DefaultComputeShaderName}\". Reinstala el paquete o restaura el asset para continuar.", MessageType.Error);
             }
 
             targetObject = (GameObject)EditorGUILayout.ObjectField("Objeto de destino", targetObject, typeof(GameObject), true);
@@ -2317,7 +2317,7 @@ namespace JaimeCamacho.VAT.Editor
                 TryAssignDefaultComputeShader();
                 if (infoTexGen == null)
                 {
-                    ReportStatus("No se asignó un Compute Shader.", MessageType.Error);
+                    ReportStatus($"No se encontró el compute shader interno \"{k_DefaultComputeShaderName}\".", MessageType.Error);
                     return false;
                 }
             }
