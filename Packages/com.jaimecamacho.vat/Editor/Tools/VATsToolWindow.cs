@@ -36,6 +36,7 @@ namespace JaimeCamacho.VAT.Editor
         private Texture2D uvVisualGeneratedAtlas;
         private MeshFilter uvVisualTargetMeshFilter;
         private SkinnedMeshRenderer uvVisualTargetSkinnedMeshRenderer;
+        private UnityEngine.Object uvVisualTargetSelectionOverride;
         private Mesh uvVisualLastMesh;
         private Vector2 uvVisualPosition;
         private Vector2 uvVisualScale = Vector2.one;
@@ -721,6 +722,108 @@ namespace JaimeCamacho.VAT.Editor
                     }
                 }
             }
+        }
+
+        private UnityEngine.Object uvVisualTargetSelection
+        {
+            get
+            {
+                if (uvVisualTargetSelectionOverride != null)
+                {
+                    return uvVisualTargetSelectionOverride;
+                }
+
+                if (uvVisualTargetSkinnedMeshRenderer != null)
+                {
+                    return uvVisualTargetSkinnedMeshRenderer;
+                }
+
+                return uvVisualTargetMeshFilter;
+            }
+        }
+
+        private bool TryAssignUvVisualTarget(UnityEngine.Object newTarget)
+        {
+            if (newTarget == null)
+            {
+                uvVisualTargetMeshFilter = null;
+                uvVisualTargetSkinnedMeshRenderer = null;
+                uvVisualTargetSelectionOverride = null;
+                return true;
+            }
+
+            MeshFilter meshFilter = null;
+            SkinnedMeshRenderer skinnedMeshRenderer = null;
+            UnityEngine.Object selectionObject = null;
+
+            if (newTarget is MeshFilter directMeshFilter)
+            {
+                meshFilter = directMeshFilter;
+                selectionObject = directMeshFilter;
+            }
+            else if (newTarget is SkinnedMeshRenderer directSkinnedMesh)
+            {
+                skinnedMeshRenderer = directSkinnedMesh;
+                selectionObject = directSkinnedMesh;
+            }
+            else if (newTarget is GameObject go)
+            {
+                if (!TryFindUvVisualTargetInGameObject(go, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{go.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = go;
+            }
+            else if (newTarget is Component component)
+            {
+                GameObject componentGameObject = component.gameObject;
+
+                if (!TryFindUvVisualTargetInGameObject(componentGameObject, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{componentGameObject.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = componentGameObject;
+            }
+            else
+            {
+                ReportStatus("Selecciona un MeshFilter, SkinnedMeshRenderer o un GameObject que los contenga.", MessageType.Warning, false);
+                return false;
+            }
+
+            if (!(newTarget is MeshFilter) && skinnedMeshRenderer != null)
+            {
+                meshFilter = null;
+            }
+
+            uvVisualTargetMeshFilter = meshFilter;
+            uvVisualTargetSkinnedMeshRenderer = skinnedMeshRenderer;
+            uvVisualTargetSelectionOverride = selectionObject ?? newTarget;
+
+            return true;
+        }
+
+        private static bool TryFindUvVisualTargetInGameObject(GameObject candidate, out MeshFilter meshFilter, out SkinnedMeshRenderer skinnedMeshRenderer)
+        {
+            meshFilter = null;
+            skinnedMeshRenderer = null;
+
+            if (candidate == null)
+            {
+                return false;
+            }
+
+            skinnedMeshRenderer = candidate.GetComponentInChildren<SkinnedMeshRenderer>(true);
+            if (skinnedMeshRenderer != null)
+            {
+                return true;
+            }
+
+            meshFilter = candidate.GetComponentInChildren<MeshFilter>(true);
+            return meshFilter != null;
         }
 
         private void DrawUvVisualAtlasBuilder()
