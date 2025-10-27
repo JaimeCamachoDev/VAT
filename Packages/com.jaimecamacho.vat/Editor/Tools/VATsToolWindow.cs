@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 
@@ -51,6 +52,7 @@ namespace JaimeCamacho.VAT.Editor
         private bool uvVisualShowAtlasBuilder = true;
         private int uvVisualAtlasImageCount = 1;
         private int uvVisualAtlasCellResolution = 256;
+        private string uvVisualAtlasExportFolder = "Assets/VATAtlases";
         private readonly List<Texture2D> uvVisualAtlasSourceTextures = new List<Texture2D>();
         private readonly List<UvVisualTargetEntry> uvVisualTargets = new List<UvVisualTargetEntry>();
         private int uvVisualActiveTargetIndex = -1;
@@ -870,6 +872,36 @@ namespace JaimeCamacho.VAT.Editor
                 }
 
                 uvVisualAtlasCellResolution = EditorGUILayout.IntPopup("Resolución por imagen", uvVisualAtlasCellResolution, k_UvVisualAtlasResolutionLabels, k_UvVisualAtlasResolutionSizes);
+
+                Rect exportFolderRect = EditorGUILayout.GetControlRect();
+                exportFolderRect = EditorGUI.PrefixLabel(exportFolderRect, new GUIContent("Carpeta de exportación"));
+                uvVisualAtlasExportFolder = EditorGUI.TextField(exportFolderRect, uvVisualAtlasExportFolder);
+                int previousIndentLevel = EditorGUI.indentLevel;
+                HandleDragAndDrop(exportFolderRect, ref uvVisualAtlasExportFolder);
+                EditorGUI.indentLevel = previousIndentLevel;
+
+                if (!IsUvVisualAtlasExportPathValid())
+                {
+                    DrawMessageCard("Ruta no válida", "La carpeta debe estar dentro de Assets para exportar el atlas.", MessageType.Warning);
+                }
+
+                if (GUILayout.Button("Seleccionar carpeta de exportación"))
+                {
+                    string selectedFolder = EditorUtility.OpenFolderPanel("Seleccionar carpeta de exportación", Application.dataPath, string.Empty);
+                    if (!string.IsNullOrEmpty(selectedFolder))
+                    {
+                        string projectRelativePath = ConvertToProjectRelativePath(selectedFolder);
+                        if (!string.IsNullOrEmpty(projectRelativePath))
+                        {
+                            uvVisualAtlasExportFolder = projectRelativePath;
+                            Repaint();
+                        }
+                        else
+                        {
+                            ReportStatus("La carpeta seleccionada debe estar dentro de la carpeta Assets del proyecto.", MessageType.Error);
+                        }
+                    }
+                }
 
                 using (new EditorGUILayout.HorizontalScope())
                 {
@@ -1723,7 +1755,8 @@ namespace JaimeCamacho.VAT.Editor
             uvVisualScale = Vector2.one;
             Repaint();
 
-            ReportStatus("Transformación UV aplicada correctamente.", MessageType.Info);
+            string message = affectedCount > 1 ? "Transformación UV aplicada a las mallas seleccionadas." : "Transformación UV aplicada correctamente.";
+            ReportStatus(message, MessageType.Info);
         }
 
         private void UndoUvVisualChanges(Mesh mesh)
