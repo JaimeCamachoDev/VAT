@@ -1333,6 +1333,10 @@ namespace JaimeCamacho.VAT.Editor
 
             uvVisualOriginalUvs = (Vector2[])transformed.Clone();
 
+            uvVisualPosition = Vector2.zero;
+            uvVisualScale = Vector2.one;
+            Repaint();
+
             ReportStatus("Transformación UV aplicada correctamente.", MessageType.Info);
         }
 
