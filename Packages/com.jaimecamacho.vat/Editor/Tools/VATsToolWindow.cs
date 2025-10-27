@@ -35,6 +35,7 @@ namespace JaimeCamacho.VAT.Editor
         private Texture2D uvVisualReferenceTexture;
         private Texture2D uvVisualGeneratedAtlas;
         private MeshFilter uvVisualTargetMeshFilter;
+        private SkinnedMeshRenderer uvVisualTargetSkinnedMeshRenderer;
         private Mesh uvVisualLastMesh;
         private Vector2 uvVisualPosition;
         private Vector2 uvVisualScale = Vector2.one;
@@ -632,10 +633,10 @@ namespace JaimeCamacho.VAT.Editor
 
             uvVisualReferenceTexture = (Texture2D)EditorGUILayout.ObjectField("Textura de referencia", uvVisualReferenceTexture, typeof(Texture2D), false);
 
-            MeshFilter newTarget = (MeshFilter)EditorGUILayout.ObjectField("Mesh Filter objetivo", uvVisualTargetMeshFilter, typeof(MeshFilter), true);
-            if (newTarget != uvVisualTargetMeshFilter)
+            UnityEngine.Object displayTarget = uvVisualTargetSelection;
+            UnityEngine.Object newTarget = EditorGUILayout.ObjectField("Malla objetivo", displayTarget, typeof(UnityEngine.Object), true);
+            if (newTarget != displayTarget && TryAssignUvVisualTarget(newTarget))
             {
-                uvVisualTargetMeshFilter = newTarget;
                 ResetUvVisualTargetCache();
                 ResetUvVisualTransform();
                 Repaint();
@@ -789,13 +790,13 @@ namespace JaimeCamacho.VAT.Editor
 
         private void DrawUvVisualDiagnostics(Mesh mesh)
         {
-            if (uvVisualTargetMeshFilter == null)
+            if (uvVisualTargetMeshFilter == null && uvVisualTargetSkinnedMeshRenderer == null)
             {
-                DrawMessageCard("Selecciona una malla", "Asigna un Mesh Filter con coordenadas UV para visualizar y transformarlas.", MessageType.Info);
+                DrawMessageCard("Selecciona una malla", "Asigna un Mesh Filter, Skinned Mesh Renderer o un objeto que los contenga para visualizar y transformar sus UV.", MessageType.Info);
             }
             else if (mesh == null)
             {
-                DrawMessageCard("Malla no válida", "El Mesh Filter seleccionado no tiene una malla compartida.", MessageType.Warning);
+                DrawMessageCard("Malla no válida", "El objeto seleccionado no tiene una malla compartida.", MessageType.Warning);
             }
             else if (mesh.uv == null || mesh.uv.Length == 0)
             {
@@ -1161,12 +1162,21 @@ namespace JaimeCamacho.VAT.Editor
 
         private Mesh GetUvVisualMesh()
         {
-            if (uvVisualTargetMeshFilter == null)
+            Mesh mesh = null;
+
+            if (uvVisualTargetMeshFilter != null)
+            {
+                mesh = uvVisualTargetMeshFilter.sharedMesh;
+            }
+            else if (uvVisualTargetSkinnedMeshRenderer != null)
+            {
+                mesh = uvVisualTargetSkinnedMeshRenderer.sharedMesh;
+            }
+            else
             {
                 return null;
             }
 
-            Mesh mesh = uvVisualTargetMeshFilter.sharedMesh;
             if (mesh == null)
             {
                 return null;
@@ -1194,7 +1204,7 @@ namespace JaimeCamacho.VAT.Editor
             mesh ??= GetUvVisualMesh();
             if (mesh == null)
             {
-                ReportStatus("Selecciona un Mesh Filter válido para aplicar la transformación UV.", MessageType.Warning);
+                ReportStatus("Selecciona una malla válida para aplicar la transformación UV.", MessageType.Warning);
                 return;
             }
 
