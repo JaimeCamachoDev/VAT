@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 
@@ -34,8 +35,6 @@ namespace JaimeCamacho.VAT.Editor
 
         private Texture2D uvVisualReferenceTexture;
         private Texture2D uvVisualGeneratedAtlas;
-        private MeshFilter uvVisualTargetMeshFilter;
-        private SkinnedMeshRenderer uvVisualTargetSkinnedMeshRenderer;
         private Mesh uvVisualLastMesh;
         private Vector2 uvVisualPosition;
         private Vector2 uvVisualScale = Vector2.one;
@@ -50,7 +49,13 @@ namespace JaimeCamacho.VAT.Editor
         private bool uvVisualShowAtlasBuilder = true;
         private int uvVisualAtlasImageCount = 1;
         private int uvVisualAtlasCellResolution = 256;
+        private string uvVisualAtlasExportFolder = "Assets/VATAtlases";
+        private DefaultAsset uvVisualAtlasExportFolderAsset;
         private readonly List<Texture2D> uvVisualAtlasSourceTextures = new List<Texture2D>();
+        private readonly List<UvVisualTargetEntry> uvVisualTargets = new List<UvVisualTargetEntry>();
+        private int uvVisualActiveTargetIndex = -1;
+        private int uvVisualNextWireColorIndex;
+        private UnityEngine.Object uvVisualNewTargetCandidate;
 
         private static readonly string[] k_UvVisualAtlasResolutionLabels =
         {
@@ -73,6 +78,15 @@ namespace JaimeCamacho.VAT.Editor
         private const string k_PaintRootName = "VATPaintRoot";
         private static readonly Color k_BrushFillColor = new Color(0f, 0.5f, 1f, 0.25f);
         private static readonly Color k_BrushOutlineColor = Color.cyan;
+        private static readonly Color[] k_UvVisualWireColors =
+        {
+            new Color(0.0f, 0.78f, 1.0f),
+            new Color(1.0f, 0.55f, 0.35f),
+            new Color(0.4f, 0.9f, 0.35f),
+            new Color(0.9f, 0.3f, 0.8f),
+            new Color(1.0f, 0.85f, 0.3f),
+            new Color(0.55f, 0.6f, 1.0f)
+        };
 
         private enum ToolTab
         {
@@ -105,6 +119,33 @@ namespace JaimeCamacho.VAT.Editor
             {
                 id = Guid.NewGuid().ToString("N");
             }
+        }
+
+        [Serializable]
+        private class UvVisualTargetEntry
+        {
+            public UnityEngine.Object selectionOverride;
+            public MeshFilter meshFilter;
+            public SkinnedMeshRenderer skinnedMeshRenderer;
+            public Vector2 position = Vector2.zero;
+            public Vector2 scale = Vector2.one;
+            public float rotation;
+            public Color wireColor = new Color(0f, 0.78f, 1f, 1f);
+
+            public Mesh SharedMesh
+            {
+                get
+                {
+                    if (skinnedMeshRenderer != null)
+                    {
+                        return skinnedMeshRenderer.sharedMesh;
+                    }
+
+                    return meshFilter != null ? meshFilter.sharedMesh : null;
+                }
+            }
+
+            public bool HasValidRenderer => meshFilter != null || skinnedMeshRenderer != null;
         }
 
         private readonly List<PaintGroup> paintGroups = new List<PaintGroup>();
@@ -161,6 +202,7 @@ namespace JaimeCamacho.VAT.Editor
         private void OnEnable()
         {
             TryAssignDefaultComputeShader();
+            OnUvVisualExportFolderChanged();
         }
 
         private void OnFocus()
@@ -633,14 +675,7 @@ namespace JaimeCamacho.VAT.Editor
 
             uvVisualReferenceTexture = (Texture2D)EditorGUILayout.ObjectField("Textura de referencia", uvVisualReferenceTexture, typeof(Texture2D), false);
 
-            UnityEngine.Object displayTarget = uvVisualTargetSelection;
-            UnityEngine.Object newTarget = EditorGUILayout.ObjectField("Malla objetivo", displayTarget, typeof(UnityEngine.Object), true);
-            if (newTarget != displayTarget && TryAssignUvVisualTarget(newTarget))
-            {
-                ResetUvVisualTargetCache();
-                ResetUvVisualTransform();
-                Repaint();
-            }
+            DrawUvVisualTargetControls();
 
             Mesh mesh = GetUvVisualMesh();
 
@@ -650,9 +685,15 @@ namespace JaimeCamacho.VAT.Editor
 
             using (new EditorGUI.DisabledScope(!hasValidUvs))
             {
+                Vector2 previousPosition = uvVisualPosition;
                 uvVisualPosition = EditorGUILayout.Vector2Field("Posición", uvVisualPosition);
+                if (!Mathf.Approximately(previousPosition.x, uvVisualPosition.x) || !Mathf.Approximately(previousPosition.y, uvVisualPosition.y))
+                {
+                    StoreActiveTargetTransform();
+                }
 
                 EditorGUILayout.BeginHorizontal();
+                Vector2 previousScale = uvVisualScale;
                 Vector2 newScale = EditorGUILayout.Vector2Field("Escala", uvVisualScale);
 
                 if (uvVisualLockUniformScale)
@@ -677,12 +718,23 @@ namespace JaimeCamacho.VAT.Editor
                     newScale = new Vector2(uniform, uniform);
                 }
 
-                uvVisualScale = newScale;
-                uvVisualLockUniformScale = newLock;
-
                 EditorGUILayout.EndHorizontal();
 
+                bool scaleChanged = !Mathf.Approximately(previousScale.x, newScale.x) || !Mathf.Approximately(previousScale.y, newScale.y);
+
+                uvVisualScale = newScale;
+                uvVisualLockUniformScale = newLock;
+                if (scaleChanged)
+                {
+                    StoreActiveTargetTransform();
+                }
+
+                float previousRotation = uvVisualRotation;
                 uvVisualRotation = EditorGUILayout.Slider("Rotación", uvVisualRotation, -360f, 360f);
+                if (!Mathf.Approximately(previousRotation, uvVisualRotation))
+                {
+                    StoreActiveTargetTransform();
+                }
             }
 
             EditorGUILayout.Space();
@@ -723,6 +775,26 @@ namespace JaimeCamacho.VAT.Editor
             }
         }
 
+        private static bool TryFindUvVisualTargetInGameObject(GameObject candidate, out MeshFilter meshFilter, out SkinnedMeshRenderer skinnedMeshRenderer)
+        {
+            meshFilter = null;
+            skinnedMeshRenderer = null;
+
+            if (candidate == null)
+            {
+                return false;
+            }
+
+            skinnedMeshRenderer = candidate.GetComponentInChildren<SkinnedMeshRenderer>(true);
+            if (skinnedMeshRenderer != null)
+            {
+                return true;
+            }
+
+            meshFilter = candidate.GetComponentInChildren<MeshFilter>(true);
+            return meshFilter != null;
+        }
+
         private void DrawUvVisualAtlasBuilder()
         {
             uvVisualShowAtlasBuilder = EditorGUILayout.BeginFoldoutHeaderGroup(uvVisualShowAtlasBuilder, "Generador de atlas de referencia");
@@ -749,6 +821,73 @@ namespace JaimeCamacho.VAT.Editor
 
                 uvVisualAtlasCellResolution = EditorGUILayout.IntPopup("Resolución por imagen", uvVisualAtlasCellResolution, k_UvVisualAtlasResolutionLabels, k_UvVisualAtlasResolutionSizes);
 
+                Rect exportFieldRect = EditorGUILayout.GetControlRect();
+                Rect labelRect = exportFieldRect;
+                labelRect.width = EditorGUIUtility.labelWidth;
+                EditorGUI.LabelField(labelRect, "Carpeta de exportación");
+
+                const float objectFieldWidth = 80f;
+                const float spacing = 4f;
+                Rect textFieldRect = exportFieldRect;
+                textFieldRect.xMin = labelRect.xMax;
+                textFieldRect.width = Mathf.Max(0f, textFieldRect.width - objectFieldWidth - spacing);
+
+                EditorGUI.BeginChangeCheck();
+                string newExportFolder = EditorGUI.TextField(textFieldRect, uvVisualAtlasExportFolder);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    uvVisualAtlasExportFolder = newExportFolder;
+                    OnUvVisualExportFolderChanged();
+                }
+
+                Rect objectFieldRect = new Rect(textFieldRect.xMax + spacing, exportFieldRect.y, objectFieldWidth, EditorGUIUtility.singleLineHeight);
+                DefaultAsset chosenFolder = (DefaultAsset)EditorGUI.ObjectField(objectFieldRect, GUIContent.none, uvVisualAtlasExportFolderAsset, typeof(DefaultAsset), false);
+                if (chosenFolder != uvVisualAtlasExportFolderAsset)
+                {
+                    string folderPath = GetPathFromFolderAsset(chosenFolder);
+                    if (string.IsNullOrEmpty(folderPath) && chosenFolder != null)
+                    {
+                        ReportStatus("Selecciona una carpeta dentro de Assets para exportar el atlas.", MessageType.Error);
+                    }
+                    else
+                    {
+                        uvVisualAtlasExportFolder = folderPath ?? string.Empty;
+                        OnUvVisualExportFolderChanged();
+                    }
+                }
+
+                Rect dropRect = new Rect(textFieldRect.x, exportFieldRect.y, (objectFieldRect.xMax - textFieldRect.x), EditorGUIUtility.singleLineHeight);
+                string previousFolder = uvVisualAtlasExportFolder;
+                HandleDragAndDrop(dropRect, ref uvVisualAtlasExportFolder);
+                if (!string.Equals(previousFolder, uvVisualAtlasExportFolder, StringComparison.Ordinal))
+                {
+                    OnUvVisualExportFolderChanged();
+                }
+
+                if (!IsUvVisualAtlasExportPathValid())
+                {
+                    DrawMessageCard("Ruta no válida", "La carpeta debe estar dentro de Assets para exportar el atlas.", MessageType.Warning);
+                }
+
+                if (GUILayout.Button("Seleccionar carpeta de exportación"))
+                {
+                    string selectedFolder = EditorUtility.OpenFolderPanel("Seleccionar carpeta de exportación", Application.dataPath, string.Empty);
+                    if (!string.IsNullOrEmpty(selectedFolder))
+                    {
+                        string projectRelativePath = ConvertToProjectRelativePath(selectedFolder);
+                        if (!string.IsNullOrEmpty(projectRelativePath))
+                        {
+                            uvVisualAtlasExportFolder = projectRelativePath;
+                            OnUvVisualExportFolderChanged();
+                            Repaint();
+                        }
+                        else
+                        {
+                            ReportStatus("La carpeta seleccionada debe estar dentro de la carpeta Assets del proyecto.", MessageType.Error);
+                        }
+                    }
+                }
+
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     if (GUILayout.Button("Generar atlas de referencia"))
@@ -758,6 +897,11 @@ namespace JaimeCamacho.VAT.Editor
 
                     using (new EditorGUI.DisabledScope(uvVisualGeneratedAtlas == null))
                     {
+                        if (GUILayout.Button("Exportar atlas"))
+                        {
+                            ExportUvVisualReferenceAtlas();
+                        }
+
                         if (GUILayout.Button("Limpiar atlas generado"))
                         {
                             if (uvVisualGeneratedAtlas != null)
@@ -788,11 +932,356 @@ namespace JaimeCamacho.VAT.Editor
             EditorGUILayout.EndFoldoutHeaderGroup();
         }
 
+        private void DrawUvVisualTargetControls()
+        {
+            EditorGUILayout.LabelField("Mallas objetivo", EditorStyles.boldLabel);
+
+            if (uvVisualTargets.Count == 0)
+            {
+                EditorGUILayout.HelpBox("Agrega una o varias mallas para visualizar y transformar sus UV.", MessageType.Info);
+            }
+
+            for (int i = 0; i < uvVisualTargets.Count; i++)
+            {
+                if (DrawUvVisualTargetRow(i))
+                {
+                    // La lista se ha modificado dentro de la fila, por lo que debemos detenernos.
+                    break;
+                }
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                uvVisualNewTargetCandidate = EditorGUILayout.ObjectField("Añadir malla objetivo", uvVisualNewTargetCandidate, typeof(UnityEngine.Object), true);
+
+                using (new EditorGUI.DisabledScope(uvVisualNewTargetCandidate == null))
+                {
+                    if (GUILayout.Button("Agregar", GUILayout.Width(80f)))
+                    {
+                        if (TryAddUvVisualTarget(uvVisualNewTargetCandidate))
+                        {
+                            uvVisualNewTargetCandidate = null;
+                        }
+                    }
+                }
+            }
+        }
+
+        private bool DrawUvVisualTargetRow(int index)
+        {
+            if (index < 0 || index >= uvVisualTargets.Count)
+            {
+                return false;
+            }
+
+            UvVisualTargetEntry entry = uvVisualTargets[index];
+            if (entry == null)
+            {
+                return false;
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                bool wasActive = uvVisualActiveTargetIndex == index;
+                bool newActive = GUILayout.Toggle(wasActive, GUIContent.none, EditorStyles.radioButton, GUILayout.Width(20f));
+                if (newActive && !wasActive)
+                {
+                    SetActiveUvVisualTarget(index);
+                }
+
+                Rect colorRect = GUILayoutUtility.GetRect(18f, EditorGUIUtility.singleLineHeight, GUILayout.Width(18f));
+                EditorGUI.DrawRect(colorRect, entry.wireColor);
+                Color borderColor = EditorGUIUtility.isProSkin ? new Color(0f, 0f, 0f, 0.6f) : new Color(0f, 0f, 0f, 0.35f);
+                EditorGUI.DrawRect(new Rect(colorRect.x, colorRect.y, colorRect.width, 1f), borderColor);
+                EditorGUI.DrawRect(new Rect(colorRect.x, colorRect.yMax - 1f, colorRect.width, 1f), borderColor);
+                EditorGUI.DrawRect(new Rect(colorRect.x, colorRect.y, 1f, colorRect.height), borderColor);
+                EditorGUI.DrawRect(new Rect(colorRect.xMax - 1f, colorRect.y, 1f, colorRect.height), borderColor);
+                GUILayout.Space(4f);
+
+                UnityEngine.Object displayTarget = GetUvVisualTargetDisplayObject(entry);
+                UnityEngine.Object updatedTarget = EditorGUILayout.ObjectField(displayTarget, typeof(UnityEngine.Object), true);
+
+                if (updatedTarget != displayTarget)
+                {
+                    if (TryPopulateUvVisualTargetEntry(entry, updatedTarget))
+                    {
+                        if (!entry.HasValidRenderer)
+                        {
+                            RemoveUvVisualTargetAt(index);
+                            return true;
+                        }
+
+                        if (uvVisualActiveTargetIndex == index)
+                        {
+                            ResetUvVisualTargetCache();
+                            LoadActiveUvVisualTargetTransform();
+                            Repaint();
+                        }
+                    }
+                    else
+                    {
+                        Repaint();
+                    }
+                }
+
+                if (GUILayout.Button("X", GUILayout.Width(22f)))
+                {
+                    RemoveUvVisualTargetAt(index);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryAddUvVisualTarget(UnityEngine.Object candidate)
+        {
+            if (candidate == null)
+            {
+                return false;
+            }
+
+            var entry = new UvVisualTargetEntry();
+            if (!TryPopulateUvVisualTargetEntry(entry, candidate) || !entry.HasValidRenderer)
+            {
+                return false;
+            }
+
+            entry.wireColor = GetNextUvVisualWireColor();
+            uvVisualTargets.Add(entry);
+            SetActiveUvVisualTarget(uvVisualTargets.Count - 1);
+
+            return true;
+        }
+
+        private void RemoveUvVisualTargetAt(int index)
+        {
+            if (index < 0 || index >= uvVisualTargets.Count)
+            {
+                return;
+            }
+
+            bool removingActive = uvVisualActiveTargetIndex == index;
+
+            uvVisualTargets.RemoveAt(index);
+
+            if (uvVisualTargets.Count == 0)
+            {
+                uvVisualActiveTargetIndex = -1;
+                ResetUvVisualTargetCache();
+                ResetUvVisualTransform(false);
+                ResetUvVisualWireColorCycle();
+                Repaint();
+                return;
+            }
+
+            if (removingActive)
+            {
+                int newIndex = Mathf.Clamp(index, 0, uvVisualTargets.Count - 1);
+                uvVisualActiveTargetIndex = -1;
+                SetActiveUvVisualTarget(newIndex);
+            }
+            else if (uvVisualActiveTargetIndex > index)
+            {
+                uvVisualActiveTargetIndex = Mathf.Clamp(uvVisualActiveTargetIndex - 1, 0, uvVisualTargets.Count - 1);
+            }
+        }
+
+        private void SetActiveUvVisualTarget(int index)
+        {
+            StoreActiveTargetTransform();
+
+            if (index < 0 || index >= uvVisualTargets.Count)
+            {
+                uvVisualActiveTargetIndex = -1;
+                ResetUvVisualTargetCache();
+                ResetUvVisualTransform(false);
+                Repaint();
+                return;
+            }
+
+            if (uvVisualActiveTargetIndex == index)
+            {
+                ResetUvVisualTargetCache();
+                LoadActiveUvVisualTargetTransform();
+                Repaint();
+                return;
+            }
+
+            uvVisualActiveTargetIndex = index;
+            ResetUvVisualTargetCache();
+            LoadActiveUvVisualTargetTransform();
+            Repaint();
+        }
+
+        private UvVisualTargetEntry GetActiveUvVisualTarget()
+        {
+            if (uvVisualActiveTargetIndex < 0 || uvVisualActiveTargetIndex >= uvVisualTargets.Count)
+            {
+                return null;
+            }
+
+            UvVisualTargetEntry entry = uvVisualTargets[uvVisualActiveTargetIndex];
+            if (entry == null || !entry.HasValidRenderer)
+            {
+                return null;
+            }
+
+            return entry;
+        }
+
+        private void StoreActiveTargetTransform()
+        {
+            if (uvVisualActiveTargetIndex < 0 || uvVisualActiveTargetIndex >= uvVisualTargets.Count)
+            {
+                return;
+            }
+
+            UvVisualTargetEntry entry = uvVisualTargets[uvVisualActiveTargetIndex];
+            if (entry == null)
+            {
+                return;
+            }
+
+            entry.position = uvVisualPosition;
+            entry.scale = uvVisualScale;
+            entry.rotation = uvVisualRotation;
+        }
+
+        private void LoadActiveUvVisualTargetTransform()
+        {
+            if (uvVisualActiveTargetIndex < 0 || uvVisualActiveTargetIndex >= uvVisualTargets.Count)
+            {
+                ResetUvVisualTransform(false);
+                return;
+            }
+
+            UvVisualTargetEntry entry = uvVisualTargets[uvVisualActiveTargetIndex];
+            if (entry == null)
+            {
+                ResetUvVisualTransform(false);
+                return;
+            }
+
+            uvVisualPosition = entry.position;
+            uvVisualScale = entry.scale;
+            uvVisualRotation = entry.rotation;
+        }
+
+        private Color GetNextUvVisualWireColor()
+        {
+            if (k_UvVisualWireColors == null || k_UvVisualWireColors.Length == 0)
+            {
+                return new Color(0f, 0.78f, 1f, 1f);
+            }
+
+            Color color = k_UvVisualWireColors[uvVisualNextWireColorIndex % k_UvVisualWireColors.Length];
+            uvVisualNextWireColorIndex++;
+            return color;
+        }
+
+        private void ResetUvVisualWireColorCycle()
+        {
+            uvVisualNextWireColorIndex = 0;
+        }
+
+        private static UnityEngine.Object GetUvVisualTargetDisplayObject(UvVisualTargetEntry entry)
+        {
+            if (entry == null)
+            {
+                return null;
+            }
+
+            if (entry.selectionOverride != null)
+            {
+                return entry.selectionOverride;
+            }
+
+            if (entry.skinnedMeshRenderer != null)
+            {
+                return entry.skinnedMeshRenderer;
+            }
+
+            return entry.meshFilter;
+        }
+
+        private bool TryPopulateUvVisualTargetEntry(UvVisualTargetEntry entry, UnityEngine.Object newTarget)
+        {
+            if (entry == null)
+            {
+                return false;
+            }
+
+            if (newTarget == null)
+            {
+                entry.meshFilter = null;
+                entry.skinnedMeshRenderer = null;
+                entry.selectionOverride = null;
+                return true;
+            }
+
+            MeshFilter meshFilter = null;
+            SkinnedMeshRenderer skinnedMeshRenderer = null;
+            UnityEngine.Object selectionObject = null;
+
+            if (newTarget is MeshFilter directMeshFilter)
+            {
+                meshFilter = directMeshFilter;
+                selectionObject = directMeshFilter;
+            }
+            else if (newTarget is SkinnedMeshRenderer directSkinnedMesh)
+            {
+                skinnedMeshRenderer = directSkinnedMesh;
+                selectionObject = directSkinnedMesh;
+            }
+            else if (newTarget is GameObject go)
+            {
+                if (!TryFindUvVisualTargetInGameObject(go, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{go.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = go;
+            }
+            else if (newTarget is Component component)
+            {
+                GameObject componentGameObject = component.gameObject;
+
+                if (!TryFindUvVisualTargetInGameObject(componentGameObject, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{componentGameObject.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = componentGameObject;
+            }
+            else
+            {
+                ReportStatus("Selecciona un MeshFilter, SkinnedMeshRenderer o un GameObject que los contenga.", MessageType.Warning, false);
+                return false;
+            }
+
+            if (!(newTarget is MeshFilter) && skinnedMeshRenderer != null)
+            {
+                meshFilter = null;
+            }
+
+            entry.meshFilter = meshFilter;
+            entry.skinnedMeshRenderer = skinnedMeshRenderer;
+            entry.selectionOverride = selectionObject ?? newTarget;
+            entry.position = Vector2.zero;
+            entry.scale = Vector2.one;
+            entry.rotation = 0f;
+
+            return true;
+        }
+
         private void DrawUvVisualDiagnostics(Mesh mesh)
         {
-            if (uvVisualTargetMeshFilter == null && uvVisualTargetSkinnedMeshRenderer == null)
+            if (GetActiveUvVisualTarget() == null)
             {
-                DrawMessageCard("Selecciona una malla", "Asigna un Mesh Filter, Skinned Mesh Renderer o un objeto que los contenga para visualizar y transformar sus UV.", MessageType.Info);
+                DrawMessageCard("Selecciona una malla", "Asigna uno o varios Mesh Filters, Skinned Mesh Renderers u objetos que los contengan para visualizar y transformar sus UV.", MessageType.Info);
             }
             else if (mesh == null)
             {
@@ -897,6 +1386,106 @@ namespace JaimeCamacho.VAT.Editor
 
             ReportStatus($"Atlas de referencia generado con {textureCount} imágenes ({atlasWidth}x{atlasHeight} píxeles).", MessageType.Info, false);
             Repaint();
+        }
+
+        private void ExportUvVisualReferenceAtlas()
+        {
+            if (uvVisualGeneratedAtlas == null)
+            {
+                ReportStatus("No hay un atlas generado para exportar.", MessageType.Warning);
+                return;
+            }
+
+            if (!IsUvVisualAtlasExportPathValid())
+            {
+                ReportStatus("La carpeta de exportación debe estar dentro de la carpeta Assets del proyecto.", MessageType.Warning);
+                return;
+            }
+
+            if (!EnsureDirectoryExists(uvVisualAtlasExportFolder))
+            {
+                return;
+            }
+
+            OnUvVisualExportFolderChanged();
+
+            string defaultName = string.IsNullOrEmpty(uvVisualGeneratedAtlas.name) ? "VAT_UV_ReferenceAtlas" : uvVisualGeneratedAtlas.name;
+            string sanitizedName = SanitizeFileName(Path.GetFileNameWithoutExtension(defaultName));
+            if (string.IsNullOrEmpty(sanitizedName))
+            {
+                sanitizedName = "VAT_UV_ReferenceAtlas";
+            }
+
+            string basePath = Path.Combine(uvVisualAtlasExportFolder, sanitizedName + ".png").Replace("\\", "/");
+            string path = AssetDatabase.GenerateUniqueAssetPath(basePath);
+
+            byte[] pngData = uvVisualGeneratedAtlas.EncodeToPNG();
+            if (pngData == null || pngData.Length == 0)
+            {
+                ReportStatus("No se pudo codificar el atlas generado en formato PNG.", MessageType.Error);
+                return;
+            }
+
+            try
+            {
+                File.WriteAllBytes(path, pngData);
+            }
+            catch (Exception e)
+            {
+                ReportStatus($"No se pudo guardar el atlas en disco: {e.Message}", MessageType.Error);
+                return;
+            }
+
+            AssetDatabase.ImportAsset(path);
+
+            if (AssetImporter.GetAtPath(path) is TextureImporter importer)
+            {
+                importer.wrapMode = TextureWrapMode.Clamp;
+                importer.filterMode = FilterMode.Bilinear;
+                importer.textureCompression = TextureImporterCompression.Uncompressed;
+                importer.SaveAndReimport();
+            }
+
+            Texture2D exportedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (exportedTexture != null)
+            {
+                uvVisualReferenceTexture = exportedTexture;
+            }
+
+            Repaint();
+            ReportStatus($"Atlas exportado correctamente a \"{path}\".", MessageType.Info);
+        }
+
+        private bool IsUvVisualAtlasExportPathValid()
+        {
+            if (string.IsNullOrEmpty(uvVisualAtlasExportFolder))
+            {
+                return false;
+            }
+
+            if (!uvVisualAtlasExportFolder.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return IsProjectRelativeFolder(uvVisualAtlasExportFolder);
+        }
+
+        private static string SanitizeFileName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+            {
+                return string.Empty;
+            }
+
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            var builder = new StringBuilder(name.Length);
+            foreach (char c in name)
+            {
+                builder.Append(Array.IndexOf(invalidChars, c) >= 0 ? '_' : c);
+            }
+
+            return builder.ToString().Trim();
         }
 
         private static void CopyTextureToAtlas(Texture2D source, Texture2D atlas, int offsetX, int offsetY, int targetResolution)
@@ -1015,8 +1604,11 @@ namespace JaimeCamacho.VAT.Editor
 
             Handles.BeginGUI();
             Color previous = Handles.color;
-            Color fillColor = new Color(0f, 0.78f, 1f, 0.22f);
-            Color outlineColor = new Color(0f, 0.95f, 1f, 0.85f);
+            UvVisualTargetEntry activeTarget = GetActiveUvVisualTarget();
+            Color baseColor = activeTarget?.wireColor ?? new Color(0f, 0.78f, 1f, 1f);
+            Color fillColor = new Color(baseColor.r, baseColor.g, baseColor.b, 0.22f);
+            Color outlineColor = Color.Lerp(baseColor, Color.white, 0.2f);
+            outlineColor.a = 0.9f;
 
             Handles.color = fillColor;
 
@@ -1085,6 +1677,7 @@ namespace JaimeCamacho.VAT.Editor
                         Vector2 deltaPixels = e.mousePosition - uvVisualDragStartMousePos;
                         Vector2 deltaUv = new Vector2(deltaPixels.x / rect.width, -deltaPixels.y / rect.height);
                         uvVisualPosition = uvVisualDragStartUvPos + deltaUv;
+                        StoreActiveTargetTransform();
                         Repaint();
                         e.Use();
                     }
@@ -1115,6 +1708,7 @@ namespace JaimeCamacho.VAT.Editor
                         uvVisualScale.x = Mathf.Clamp(uvVisualScale.x, 0.01f, 100f);
                         uvVisualScale.y = Mathf.Clamp(uvVisualScale.y, 0.01f, 100f);
 
+                        StoreActiveTargetTransform();
                         Repaint();
                         e.Use();
                     }
@@ -1153,32 +1747,36 @@ namespace JaimeCamacho.VAT.Editor
             uvVisualIsDragging = false;
         }
 
-        private void ResetUvVisualTransform()
+        private void ResetUvVisualTransform(bool propagateToActiveTarget = true)
         {
             uvVisualPosition = Vector2.zero;
             uvVisualScale = Vector2.one;
             uvVisualRotation = 0f;
+            uvVisualIsDragging = false;
+
+            if (propagateToActiveTarget)
+            {
+                StoreActiveTargetTransform();
+            }
         }
 
         private Mesh GetUvVisualMesh()
         {
-            Mesh mesh = null;
-
-            if (uvVisualTargetMeshFilter != null)
+            UvVisualTargetEntry activeTarget = GetActiveUvVisualTarget();
+            if (activeTarget == null)
             {
-                mesh = uvVisualTargetMeshFilter.sharedMesh;
-            }
-            else if (uvVisualTargetSkinnedMeshRenderer != null)
-            {
-                mesh = uvVisualTargetSkinnedMeshRenderer.sharedMesh;
-            }
-            else
-            {
+                uvVisualOriginalUvs = null;
+                uvVisualInitialUvs = null;
+                uvVisualLastMesh = null;
                 return null;
             }
 
+            Mesh mesh = activeTarget.SharedMesh;
             if (mesh == null)
             {
+                uvVisualOriginalUvs = null;
+                uvVisualInitialUvs = null;
+                uvVisualLastMesh = null;
                 return null;
             }
 
@@ -1201,8 +1799,8 @@ namespace JaimeCamacho.VAT.Editor
 
         private void ApplyUvVisualTransform(Mesh mesh)
         {
-            mesh ??= GetUvVisualMesh();
-            if (mesh == null)
+            Mesh previewMesh = mesh ?? GetUvVisualMesh();
+            if (previewMesh == null)
             {
                 ReportStatus("Selecciona una malla válida para aplicar la transformación UV.", MessageType.Warning);
                 return;
@@ -1214,23 +1812,87 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
-            Vector2[] transformed = (Vector2[])uvVisualOriginalUvs.Clone();
-            Matrix4x4 transformMatrix = Matrix4x4.TRS(uvVisualPosition, Quaternion.Euler(0f, 0f, uvVisualRotation), uvVisualScale);
+            var processedMeshes = new HashSet<Mesh>();
+            int affectedCount = 0;
 
-            Undo.RecordObject(mesh, "Aplicar transformación UV");
-
-            for (int i = 0; i < transformed.Length; i++)
+            foreach (UvVisualTargetEntry entry in uvVisualTargets)
             {
-                Vector3 result = transformMatrix.MultiplyPoint3x4(new Vector3(transformed[i].x, transformed[i].y, 0f));
-                transformed[i] = new Vector2(result.x, result.y);
+                if (entry == null || !entry.HasValidRenderer)
+                {
+                    continue;
+                }
+
+                Mesh targetMesh = entry.SharedMesh;
+                if (targetMesh == null || processedMeshes.Contains(targetMesh))
+                {
+                    continue;
+                }
+
+                Vector2[] sourceUvs;
+                if (targetMesh == previewMesh)
+                {
+                    sourceUvs = (Vector2[])uvVisualOriginalUvs.Clone();
+                }
+                else
+                {
+                    Vector2[] meshUvs = targetMesh.uv;
+                    if (meshUvs == null || meshUvs.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    sourceUvs = (Vector2[])meshUvs.Clone();
+                }
+
+                Matrix4x4 transformMatrix = Matrix4x4.TRS(entry.position, Quaternion.Euler(0f, 0f, entry.rotation), entry.scale);
+                Vector2[] transformed = new Vector2[sourceUvs.Length];
+                for (int i = 0; i < sourceUvs.Length; i++)
+                {
+                    Vector3 result = transformMatrix.MultiplyPoint3x4(new Vector3(sourceUvs[i].x, sourceUvs[i].y, 0f));
+                    transformed[i] = new Vector2(result.x, result.y);
+                }
+
+                Undo.RecordObject(targetMesh, "Aplicar transformación UV");
+                targetMesh.uv = transformed;
+                EditorUtility.SetDirty(targetMesh);
+
+                if (targetMesh == previewMesh)
+                {
+                    uvVisualOriginalUvs = (Vector2[])transformed.Clone();
+                }
+
+                entry.position = Vector2.zero;
+                entry.scale = Vector2.one;
+                entry.rotation = 0f;
+
+                processedMeshes.Add(targetMesh);
+                affectedCount++;
             }
 
-            mesh.uv = transformed;
-            EditorUtility.SetDirty(mesh);
+            if (affectedCount == 0)
+            {
+                ReportStatus("No se encontraron mallas válidas para aplicar la transformación UV.", MessageType.Warning);
+                return;
+            }
 
-            uvVisualOriginalUvs = (Vector2[])transformed.Clone();
+            foreach (UvVisualTargetEntry entry in uvVisualTargets)
+            {
+                if (entry == null)
+                {
+                    continue;
+                }
 
-            ReportStatus("Transformación UV aplicada correctamente.", MessageType.Info);
+                entry.position = Vector2.zero;
+                entry.scale = Vector2.one;
+                entry.rotation = 0f;
+            }
+
+            ResetUvVisualTransform();
+            LoadActiveUvVisualTargetTransform();
+            Repaint();
+
+            string message = affectedCount > 1 ? "Transformación UV aplicada a las mallas seleccionadas." : "Transformación UV aplicada correctamente.";
+            ReportStatus(message, MessageType.Info);
         }
 
         private void UndoUvVisualChanges(Mesh mesh)
@@ -1254,6 +1916,10 @@ namespace JaimeCamacho.VAT.Editor
             EditorUtility.SetDirty(mesh);
 
             uvVisualOriginalUvs = (Vector2[])restored.Clone();
+
+            ResetUvVisualTransform();
+            LoadActiveUvVisualTargetTransform();
+            Repaint();
 
             ReportStatus("UV restauradas a su estado original.", MessageType.Info);
         }
@@ -2075,8 +2741,48 @@ namespace JaimeCamacho.VAT.Editor
                     current.Use();
                 }
             }
+        }
 
-            EditorGUI.indentLevel--;
+        private void OnUvVisualExportFolderChanged()
+        {
+            if (string.IsNullOrEmpty(uvVisualAtlasExportFolder))
+            {
+                uvVisualAtlasExportFolder = string.Empty;
+                uvVisualAtlasExportFolderAsset = null;
+                return;
+            }
+
+            uvVisualAtlasExportFolder = uvVisualAtlasExportFolder.Replace('\\', '/');
+
+            if (!IsUvVisualAtlasExportPathValid())
+            {
+                uvVisualAtlasExportFolderAsset = null;
+                return;
+            }
+
+            uvVisualAtlasExportFolderAsset = AssetDatabase.LoadAssetAtPath<DefaultAsset>(uvVisualAtlasExportFolder);
+        }
+
+        private static string GetPathFromFolderAsset(DefaultAsset folderAsset)
+        {
+            if (folderAsset == null)
+            {
+                return string.Empty;
+            }
+
+            string assetPath = AssetDatabase.GetAssetPath(folderAsset);
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                return string.Empty;
+            }
+
+            if (AssetDatabase.IsValidFolder(assetPath))
+            {
+                return assetPath;
+            }
+
+            string directory = Path.GetDirectoryName(assetPath);
+            return string.IsNullOrEmpty(directory) ? string.Empty : directory.Replace('\\', '/');
         }
 
         private bool TryAssignOutputPathFromPaths(IEnumerable<string> paths, ref string targetPath)
