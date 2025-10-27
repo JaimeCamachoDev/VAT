@@ -35,6 +35,9 @@ namespace JaimeCamacho.VAT.Editor
 
         private Texture2D uvVisualReferenceTexture;
         private Texture2D uvVisualGeneratedAtlas;
+        private MeshFilter uvVisualTargetMeshFilter;
+        private SkinnedMeshRenderer uvVisualTargetSkinnedMeshRenderer;
+        private UnityEngine.Object uvVisualTargetSelectionOverride;
         private Mesh uvVisualLastMesh;
         private Vector2 uvVisualPosition;
         private Vector2 uvVisualScale = Vector2.one;
@@ -50,11 +53,9 @@ namespace JaimeCamacho.VAT.Editor
         private int uvVisualAtlasImageCount = 1;
         private int uvVisualAtlasCellResolution = 256;
         private string uvVisualAtlasExportFolder = "Assets/VATAtlases";
-        private DefaultAsset uvVisualAtlasExportFolderAsset;
         private readonly List<Texture2D> uvVisualAtlasSourceTextures = new List<Texture2D>();
         private readonly List<UvVisualTargetEntry> uvVisualTargets = new List<UvVisualTargetEntry>();
         private int uvVisualActiveTargetIndex = -1;
-        private int uvVisualNextWireColorIndex;
         private UnityEngine.Object uvVisualNewTargetCandidate;
 
         private static readonly string[] k_UvVisualAtlasResolutionLabels =
@@ -127,10 +128,6 @@ namespace JaimeCamacho.VAT.Editor
             public UnityEngine.Object selectionOverride;
             public MeshFilter meshFilter;
             public SkinnedMeshRenderer skinnedMeshRenderer;
-            public Vector2 position = Vector2.zero;
-            public Vector2 scale = Vector2.one;
-            public float rotation;
-            public Color wireColor = new Color(0f, 0.78f, 1f, 1f);
 
             public Mesh SharedMesh
             {
@@ -775,6 +772,88 @@ namespace JaimeCamacho.VAT.Editor
             }
         }
 
+        private UnityEngine.Object uvVisualTargetSelection
+        {
+            get
+            {
+                if (uvVisualTargetSelectionOverride != null)
+                {
+                    return uvVisualTargetSelectionOverride;
+                }
+
+                if (uvVisualTargetSkinnedMeshRenderer != null)
+                {
+                    return uvVisualTargetSkinnedMeshRenderer;
+                }
+
+                return uvVisualTargetMeshFilter;
+            }
+        }
+
+        private bool TryAssignUvVisualTarget(UnityEngine.Object newTarget)
+        {
+            if (newTarget == null)
+            {
+                uvVisualTargetMeshFilter = null;
+                uvVisualTargetSkinnedMeshRenderer = null;
+                uvVisualTargetSelectionOverride = null;
+                return true;
+            }
+
+            MeshFilter meshFilter = null;
+            SkinnedMeshRenderer skinnedMeshRenderer = null;
+            UnityEngine.Object selectionObject = null;
+
+            if (newTarget is MeshFilter directMeshFilter)
+            {
+                meshFilter = directMeshFilter;
+                selectionObject = directMeshFilter;
+            }
+            else if (newTarget is SkinnedMeshRenderer directSkinnedMesh)
+            {
+                skinnedMeshRenderer = directSkinnedMesh;
+                selectionObject = directSkinnedMesh;
+            }
+            else if (newTarget is GameObject go)
+            {
+                if (!TryFindUvVisualTargetInGameObject(go, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{go.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = go;
+            }
+            else if (newTarget is Component component)
+            {
+                GameObject componentGameObject = component.gameObject;
+
+                if (!TryFindUvVisualTargetInGameObject(componentGameObject, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{componentGameObject.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = componentGameObject;
+            }
+            else
+            {
+                ReportStatus("Selecciona un MeshFilter, SkinnedMeshRenderer o un GameObject que los contenga.", MessageType.Warning, false);
+                return false;
+            }
+
+            if (!(newTarget is MeshFilter) && skinnedMeshRenderer != null)
+            {
+                meshFilter = null;
+            }
+
+            uvVisualTargetMeshFilter = meshFilter;
+            uvVisualTargetSkinnedMeshRenderer = skinnedMeshRenderer;
+            uvVisualTargetSelectionOverride = selectionObject ?? newTarget;
+
+            return true;
+        }
+
         private static bool TryFindUvVisualTargetInGameObject(GameObject candidate, out MeshFilter meshFilter, out SkinnedMeshRenderer skinnedMeshRenderer)
         {
             meshFilter = null;
@@ -821,48 +900,12 @@ namespace JaimeCamacho.VAT.Editor
 
                 uvVisualAtlasCellResolution = EditorGUILayout.IntPopup("Resolución por imagen", uvVisualAtlasCellResolution, k_UvVisualAtlasResolutionLabels, k_UvVisualAtlasResolutionSizes);
 
-                Rect exportFieldRect = EditorGUILayout.GetControlRect();
-                Rect labelRect = exportFieldRect;
-                labelRect.width = EditorGUIUtility.labelWidth;
-                EditorGUI.LabelField(labelRect, "Carpeta de exportación");
-
-                const float objectFieldWidth = 80f;
-                const float spacing = 4f;
-                Rect textFieldRect = exportFieldRect;
-                textFieldRect.xMin = labelRect.xMax;
-                textFieldRect.width = Mathf.Max(0f, textFieldRect.width - objectFieldWidth - spacing);
-
-                EditorGUI.BeginChangeCheck();
-                string newExportFolder = EditorGUI.TextField(textFieldRect, uvVisualAtlasExportFolder);
-                if (EditorGUI.EndChangeCheck())
-                {
-                    uvVisualAtlasExportFolder = newExportFolder;
-                    OnUvVisualExportFolderChanged();
-                }
-
-                Rect objectFieldRect = new Rect(textFieldRect.xMax + spacing, exportFieldRect.y, objectFieldWidth, EditorGUIUtility.singleLineHeight);
-                DefaultAsset chosenFolder = (DefaultAsset)EditorGUI.ObjectField(objectFieldRect, GUIContent.none, uvVisualAtlasExportFolderAsset, typeof(DefaultAsset), false);
-                if (chosenFolder != uvVisualAtlasExportFolderAsset)
-                {
-                    string folderPath = GetPathFromFolderAsset(chosenFolder);
-                    if (string.IsNullOrEmpty(folderPath) && chosenFolder != null)
-                    {
-                        ReportStatus("Selecciona una carpeta dentro de Assets para exportar el atlas.", MessageType.Error);
-                    }
-                    else
-                    {
-                        uvVisualAtlasExportFolder = folderPath ?? string.Empty;
-                        OnUvVisualExportFolderChanged();
-                    }
-                }
-
-                Rect dropRect = new Rect(textFieldRect.x, exportFieldRect.y, (objectFieldRect.xMax - textFieldRect.x), EditorGUIUtility.singleLineHeight);
-                string previousFolder = uvVisualAtlasExportFolder;
-                HandleDragAndDrop(dropRect, ref uvVisualAtlasExportFolder);
-                if (!string.Equals(previousFolder, uvVisualAtlasExportFolder, StringComparison.Ordinal))
-                {
-                    OnUvVisualExportFolderChanged();
-                }
+                Rect exportFolderRect = EditorGUILayout.GetControlRect();
+                exportFolderRect = EditorGUI.PrefixLabel(exportFolderRect, new GUIContent("Carpeta de exportación"));
+                uvVisualAtlasExportFolder = EditorGUI.TextField(exportFolderRect, uvVisualAtlasExportFolder);
+                int previousIndentLevel = EditorGUI.indentLevel;
+                HandleDragAndDrop(exportFolderRect, ref uvVisualAtlasExportFolder);
+                EditorGUI.indentLevel = previousIndentLevel;
 
                 if (!IsUvVisualAtlasExportPathValid())
                 {
@@ -878,7 +921,6 @@ namespace JaimeCamacho.VAT.Editor
                         if (!string.IsNullOrEmpty(projectRelativePath))
                         {
                             uvVisualAtlasExportFolder = projectRelativePath;
-                            OnUvVisualExportFolderChanged();
                             Repaint();
                         }
                         else
@@ -975,10 +1017,6 @@ namespace JaimeCamacho.VAT.Editor
             }
 
             UvVisualTargetEntry entry = uvVisualTargets[index];
-            if (entry == null)
-            {
-                return false;
-            }
 
             using (new EditorGUILayout.HorizontalScope())
             {
@@ -988,15 +1026,6 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     SetActiveUvVisualTarget(index);
                 }
-
-                Rect colorRect = GUILayoutUtility.GetRect(18f, EditorGUIUtility.singleLineHeight, GUILayout.Width(18f));
-                EditorGUI.DrawRect(colorRect, entry.wireColor);
-                Color borderColor = EditorGUIUtility.isProSkin ? new Color(0f, 0f, 0f, 0.6f) : new Color(0f, 0f, 0f, 0.35f);
-                EditorGUI.DrawRect(new Rect(colorRect.x, colorRect.y, colorRect.width, 1f), borderColor);
-                EditorGUI.DrawRect(new Rect(colorRect.x, colorRect.yMax - 1f, colorRect.width, 1f), borderColor);
-                EditorGUI.DrawRect(new Rect(colorRect.x, colorRect.y, 1f, colorRect.height), borderColor);
-                EditorGUI.DrawRect(new Rect(colorRect.xMax - 1f, colorRect.y, 1f, colorRect.height), borderColor);
-                GUILayout.Space(4f);
 
                 UnityEngine.Object displayTarget = GetUvVisualTargetDisplayObject(entry);
                 UnityEngine.Object updatedTarget = EditorGUILayout.ObjectField(displayTarget, typeof(UnityEngine.Object), true);
@@ -1014,7 +1043,6 @@ namespace JaimeCamacho.VAT.Editor
                         if (uvVisualActiveTargetIndex == index)
                         {
                             ResetUvVisualTargetCache();
-                            LoadActiveUvVisualTargetTransform();
                             Repaint();
                         }
                     }
@@ -1047,7 +1075,6 @@ namespace JaimeCamacho.VAT.Editor
                 return false;
             }
 
-            entry.wireColor = GetNextUvVisualWireColor();
             uvVisualTargets.Add(entry);
             SetActiveUvVisualTarget(uvVisualTargets.Count - 1);
 
@@ -1069,8 +1096,6 @@ namespace JaimeCamacho.VAT.Editor
             {
                 uvVisualActiveTargetIndex = -1;
                 ResetUvVisualTargetCache();
-                ResetUvVisualTransform(false);
-                ResetUvVisualWireColorCycle();
                 Repaint();
                 return;
             }
@@ -1089,28 +1114,21 @@ namespace JaimeCamacho.VAT.Editor
 
         private void SetActiveUvVisualTarget(int index)
         {
-            StoreActiveTargetTransform();
-
             if (index < 0 || index >= uvVisualTargets.Count)
             {
                 uvVisualActiveTargetIndex = -1;
                 ResetUvVisualTargetCache();
-                ResetUvVisualTransform(false);
                 Repaint();
                 return;
             }
 
             if (uvVisualActiveTargetIndex == index)
             {
-                ResetUvVisualTargetCache();
-                LoadActiveUvVisualTargetTransform();
-                Repaint();
                 return;
             }
 
             uvVisualActiveTargetIndex = index;
             ResetUvVisualTargetCache();
-            LoadActiveUvVisualTargetTransform();
             Repaint();
         }
 
@@ -1128,61 +1146,6 @@ namespace JaimeCamacho.VAT.Editor
             }
 
             return entry;
-        }
-
-        private void StoreActiveTargetTransform()
-        {
-            if (uvVisualActiveTargetIndex < 0 || uvVisualActiveTargetIndex >= uvVisualTargets.Count)
-            {
-                return;
-            }
-
-            UvVisualTargetEntry entry = uvVisualTargets[uvVisualActiveTargetIndex];
-            if (entry == null)
-            {
-                return;
-            }
-
-            entry.position = uvVisualPosition;
-            entry.scale = uvVisualScale;
-            entry.rotation = uvVisualRotation;
-        }
-
-        private void LoadActiveUvVisualTargetTransform()
-        {
-            if (uvVisualActiveTargetIndex < 0 || uvVisualActiveTargetIndex >= uvVisualTargets.Count)
-            {
-                ResetUvVisualTransform(false);
-                return;
-            }
-
-            UvVisualTargetEntry entry = uvVisualTargets[uvVisualActiveTargetIndex];
-            if (entry == null)
-            {
-                ResetUvVisualTransform(false);
-                return;
-            }
-
-            uvVisualPosition = entry.position;
-            uvVisualScale = entry.scale;
-            uvVisualRotation = entry.rotation;
-        }
-
-        private Color GetNextUvVisualWireColor()
-        {
-            if (k_UvVisualWireColors == null || k_UvVisualWireColors.Length == 0)
-            {
-                return new Color(0f, 0.78f, 1f, 1f);
-            }
-
-            Color color = k_UvVisualWireColors[uvVisualNextWireColorIndex % k_UvVisualWireColors.Length];
-            uvVisualNextWireColorIndex++;
-            return color;
-        }
-
-        private void ResetUvVisualWireColorCycle()
-        {
-            uvVisualNextWireColorIndex = 0;
         }
 
         private static UnityEngine.Object GetUvVisualTargetDisplayObject(UvVisualTargetEntry entry)
@@ -1270,9 +1233,6 @@ namespace JaimeCamacho.VAT.Editor
             entry.meshFilter = meshFilter;
             entry.skinnedMeshRenderer = skinnedMeshRenderer;
             entry.selectionOverride = selectionObject ?? newTarget;
-            entry.position = Vector2.zero;
-            entry.scale = Vector2.one;
-            entry.rotation = 0f;
 
             return true;
         }
@@ -1396,28 +1356,13 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
-            if (!IsUvVisualAtlasExportPathValid())
-            {
-                ReportStatus("La carpeta de exportación debe estar dentro de la carpeta Assets del proyecto.", MessageType.Warning);
-                return;
-            }
-
-            if (!EnsureDirectoryExists(uvVisualAtlasExportFolder))
-            {
-                return;
-            }
-
-            OnUvVisualExportFolderChanged();
-
             string defaultName = string.IsNullOrEmpty(uvVisualGeneratedAtlas.name) ? "VAT_UV_ReferenceAtlas" : uvVisualGeneratedAtlas.name;
-            string sanitizedName = SanitizeFileName(Path.GetFileNameWithoutExtension(defaultName));
-            if (string.IsNullOrEmpty(sanitizedName))
-            {
-                sanitizedName = "VAT_UV_ReferenceAtlas";
-            }
+            string path = EditorUtility.SaveFilePanelInProject("Exportar atlas de referencia", $"{defaultName}.png", "png", "Selecciona la ubicación dentro de la carpeta Assets para guardar el atlas generado.");
 
-            string basePath = Path.Combine(uvVisualAtlasExportFolder, sanitizedName + ".png").Replace("\\", "/");
-            string path = AssetDatabase.GenerateUniqueAssetPath(basePath);
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
 
             byte[] pngData = uvVisualGeneratedAtlas.EncodeToPNG();
             if (pngData == null || pngData.Length == 0)
@@ -1454,38 +1399,6 @@ namespace JaimeCamacho.VAT.Editor
 
             Repaint();
             ReportStatus($"Atlas exportado correctamente a \"{path}\".", MessageType.Info);
-        }
-
-        private bool IsUvVisualAtlasExportPathValid()
-        {
-            if (string.IsNullOrEmpty(uvVisualAtlasExportFolder))
-            {
-                return false;
-            }
-
-            if (!uvVisualAtlasExportFolder.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            return IsProjectRelativeFolder(uvVisualAtlasExportFolder);
-        }
-
-        private static string SanitizeFileName(string name)
-        {
-            if (string.IsNullOrEmpty(name))
-            {
-                return string.Empty;
-            }
-
-            char[] invalidChars = Path.GetInvalidFileNameChars();
-            var builder = new StringBuilder(name.Length);
-            foreach (char c in name)
-            {
-                builder.Append(Array.IndexOf(invalidChars, c) >= 0 ? '_' : c);
-            }
-
-            return builder.ToString().Trim();
         }
 
         private static void CopyTextureToAtlas(Texture2D source, Texture2D atlas, int offsetX, int offsetY, int targetResolution)
@@ -1812,12 +1725,13 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
+            Matrix4x4 transformMatrix = Matrix4x4.TRS(uvVisualPosition, Quaternion.Euler(0f, 0f, uvVisualRotation), uvVisualScale);
             var processedMeshes = new HashSet<Mesh>();
             int affectedCount = 0;
 
             foreach (UvVisualTargetEntry entry in uvVisualTargets)
             {
-                if (entry == null || !entry.HasValidRenderer)
+                if (entry == null)
                 {
                     continue;
                 }
@@ -1844,7 +1758,6 @@ namespace JaimeCamacho.VAT.Editor
                     sourceUvs = (Vector2[])meshUvs.Clone();
                 }
 
-                Matrix4x4 transformMatrix = Matrix4x4.TRS(entry.position, Quaternion.Euler(0f, 0f, entry.rotation), entry.scale);
                 Vector2[] transformed = new Vector2[sourceUvs.Length];
                 for (int i = 0; i < sourceUvs.Length; i++)
                 {
@@ -1861,10 +1774,6 @@ namespace JaimeCamacho.VAT.Editor
                     uvVisualOriginalUvs = (Vector2[])transformed.Clone();
                 }
 
-                entry.position = Vector2.zero;
-                entry.scale = Vector2.one;
-                entry.rotation = 0f;
-
                 processedMeshes.Add(targetMesh);
                 affectedCount++;
             }
@@ -1875,20 +1784,13 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
-            foreach (UvVisualTargetEntry entry in uvVisualTargets)
-            {
-                if (entry == null)
-                {
-                    continue;
-                }
+            uvVisualPosition = Vector2.zero;
+            uvVisualScale = Vector2.one;
+            uvVisualRotation = 0f;
+            Repaint();
 
-                entry.position = Vector2.zero;
-                entry.scale = Vector2.one;
-                entry.rotation = 0f;
-            }
-
-            ResetUvVisualTransform();
-            LoadActiveUvVisualTargetTransform();
+            uvVisualPosition = Vector2.zero;
+            uvVisualScale = Vector2.one;
             Repaint();
 
             string message = affectedCount > 1 ? "Transformación UV aplicada a las mallas seleccionadas." : "Transformación UV aplicada correctamente.";
