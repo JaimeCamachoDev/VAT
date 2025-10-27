@@ -79,6 +79,15 @@ namespace JaimeCamacho.VAT.Editor
         private const string k_PaintRootName = "VATPaintRoot";
         private static readonly Color k_BrushFillColor = new Color(0f, 0.5f, 1f, 0.25f);
         private static readonly Color k_BrushOutlineColor = Color.cyan;
+        private static readonly Color[] k_UvVisualWireColors =
+        {
+            new Color(0.0f, 0.78f, 1.0f),
+            new Color(1.0f, 0.55f, 0.35f),
+            new Color(0.4f, 0.9f, 0.35f),
+            new Color(0.9f, 0.3f, 0.8f),
+            new Color(1.0f, 0.85f, 0.3f),
+            new Color(0.55f, 0.6f, 1.0f)
+        };
 
         private enum ToolTab
         {
@@ -190,6 +199,7 @@ namespace JaimeCamacho.VAT.Editor
         private void OnEnable()
         {
             TryAssignDefaultComputeShader();
+            OnUvVisualExportFolderChanged();
         }
 
         private void OnFocus()
@@ -672,9 +682,15 @@ namespace JaimeCamacho.VAT.Editor
 
             using (new EditorGUI.DisabledScope(!hasValidUvs))
             {
+                Vector2 previousPosition = uvVisualPosition;
                 uvVisualPosition = EditorGUILayout.Vector2Field("Posición", uvVisualPosition);
+                if (!Mathf.Approximately(previousPosition.x, uvVisualPosition.x) || !Mathf.Approximately(previousPosition.y, uvVisualPosition.y))
+                {
+                    StoreActiveTargetTransform();
+                }
 
                 EditorGUILayout.BeginHorizontal();
+                Vector2 previousScale = uvVisualScale;
                 Vector2 newScale = EditorGUILayout.Vector2Field("Escala", uvVisualScale);
 
                 if (uvVisualLockUniformScale)
@@ -699,12 +715,23 @@ namespace JaimeCamacho.VAT.Editor
                     newScale = new Vector2(uniform, uniform);
                 }
 
-                uvVisualScale = newScale;
-                uvVisualLockUniformScale = newLock;
-
                 EditorGUILayout.EndHorizontal();
 
+                bool scaleChanged = !Mathf.Approximately(previousScale.x, newScale.x) || !Mathf.Approximately(previousScale.y, newScale.y);
+
+                uvVisualScale = newScale;
+                uvVisualLockUniformScale = newLock;
+                if (scaleChanged)
+                {
+                    StoreActiveTargetTransform();
+                }
+
+                float previousRotation = uvVisualRotation;
                 uvVisualRotation = EditorGUILayout.Slider("Rotación", uvVisualRotation, -360f, 360f);
+                if (!Mathf.Approximately(previousRotation, uvVisualRotation))
+                {
+                    StoreActiveTargetTransform();
+                }
             }
 
             EditorGUILayout.Space();
@@ -1490,8 +1517,11 @@ namespace JaimeCamacho.VAT.Editor
 
             Handles.BeginGUI();
             Color previous = Handles.color;
-            Color fillColor = new Color(0f, 0.78f, 1f, 0.22f);
-            Color outlineColor = new Color(0f, 0.95f, 1f, 0.85f);
+            UvVisualTargetEntry activeTarget = GetActiveUvVisualTarget();
+            Color baseColor = activeTarget?.wireColor ?? new Color(0f, 0.78f, 1f, 1f);
+            Color fillColor = new Color(baseColor.r, baseColor.g, baseColor.b, 0.22f);
+            Color outlineColor = Color.Lerp(baseColor, Color.white, 0.2f);
+            outlineColor.a = 0.9f;
 
             Handles.color = fillColor;
 
@@ -1560,6 +1590,7 @@ namespace JaimeCamacho.VAT.Editor
                         Vector2 deltaPixels = e.mousePosition - uvVisualDragStartMousePos;
                         Vector2 deltaUv = new Vector2(deltaPixels.x / rect.width, -deltaPixels.y / rect.height);
                         uvVisualPosition = uvVisualDragStartUvPos + deltaUv;
+                        StoreActiveTargetTransform();
                         Repaint();
                         e.Use();
                     }
@@ -1590,6 +1621,7 @@ namespace JaimeCamacho.VAT.Editor
                         uvVisualScale.x = Mathf.Clamp(uvVisualScale.x, 0.01f, 100f);
                         uvVisualScale.y = Mathf.Clamp(uvVisualScale.y, 0.01f, 100f);
 
+                        StoreActiveTargetTransform();
                         Repaint();
                         e.Use();
                     }
@@ -1628,11 +1660,17 @@ namespace JaimeCamacho.VAT.Editor
             uvVisualIsDragging = false;
         }
 
-        private void ResetUvVisualTransform()
+        private void ResetUvVisualTransform(bool propagateToActiveTarget = true)
         {
             uvVisualPosition = Vector2.zero;
             uvVisualScale = Vector2.one;
             uvVisualRotation = 0f;
+            uvVisualIsDragging = false;
+
+            if (propagateToActiveTarget)
+            {
+                StoreActiveTargetTransform();
+            }
         }
 
         private Mesh GetUvVisualMesh()
@@ -1780,6 +1818,10 @@ namespace JaimeCamacho.VAT.Editor
             EditorUtility.SetDirty(mesh);
 
             uvVisualOriginalUvs = (Vector2[])restored.Clone();
+
+            ResetUvVisualTransform();
+            LoadActiveUvVisualTargetTransform();
+            Repaint();
 
             ReportStatus("UV restauradas a su estado original.", MessageType.Info);
         }
@@ -2601,8 +2643,48 @@ namespace JaimeCamacho.VAT.Editor
                     current.Use();
                 }
             }
+        }
 
-            EditorGUI.indentLevel--;
+        private void OnUvVisualExportFolderChanged()
+        {
+            if (string.IsNullOrEmpty(uvVisualAtlasExportFolder))
+            {
+                uvVisualAtlasExportFolder = string.Empty;
+                uvVisualAtlasExportFolderAsset = null;
+                return;
+            }
+
+            uvVisualAtlasExportFolder = uvVisualAtlasExportFolder.Replace('\\', '/');
+
+            if (!IsUvVisualAtlasExportPathValid())
+            {
+                uvVisualAtlasExportFolderAsset = null;
+                return;
+            }
+
+            uvVisualAtlasExportFolderAsset = AssetDatabase.LoadAssetAtPath<DefaultAsset>(uvVisualAtlasExportFolder);
+        }
+
+        private static string GetPathFromFolderAsset(DefaultAsset folderAsset)
+        {
+            if (folderAsset == null)
+            {
+                return string.Empty;
+            }
+
+            string assetPath = AssetDatabase.GetAssetPath(folderAsset);
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                return string.Empty;
+            }
+
+            if (AssetDatabase.IsValidFolder(assetPath))
+            {
+                return assetPath;
+            }
+
+            string directory = Path.GetDirectoryName(assetPath);
+            return string.IsNullOrEmpty(directory) ? string.Empty : directory.Replace('\\', '/');
         }
 
         private bool TryAssignOutputPathFromPaths(IEnumerable<string> paths, ref string targetPath)
