@@ -52,6 +52,9 @@ namespace JaimeCamacho.VAT.Editor
         private int uvVisualAtlasImageCount = 1;
         private int uvVisualAtlasCellResolution = 256;
         private readonly List<Texture2D> uvVisualAtlasSourceTextures = new List<Texture2D>();
+        private readonly List<UvVisualTargetEntry> uvVisualTargets = new List<UvVisualTargetEntry>();
+        private int uvVisualActiveTargetIndex = -1;
+        private UnityEngine.Object uvVisualNewTargetCandidate;
 
         private static readonly string[] k_UvVisualAtlasResolutionLabels =
         {
@@ -106,6 +109,29 @@ namespace JaimeCamacho.VAT.Editor
             {
                 id = Guid.NewGuid().ToString("N");
             }
+        }
+
+        [Serializable]
+        private class UvVisualTargetEntry
+        {
+            public UnityEngine.Object selectionOverride;
+            public MeshFilter meshFilter;
+            public SkinnedMeshRenderer skinnedMeshRenderer;
+
+            public Mesh SharedMesh
+            {
+                get
+                {
+                    if (skinnedMeshRenderer != null)
+                    {
+                        return skinnedMeshRenderer.sharedMesh;
+                    }
+
+                    return meshFilter != null ? meshFilter.sharedMesh : null;
+                }
+            }
+
+            public bool HasValidRenderer => meshFilter != null || skinnedMeshRenderer != null;
         }
 
         private readonly List<PaintGroup> paintGroups = new List<PaintGroup>();
@@ -634,14 +660,7 @@ namespace JaimeCamacho.VAT.Editor
 
             uvVisualReferenceTexture = (Texture2D)EditorGUILayout.ObjectField("Textura de referencia", uvVisualReferenceTexture, typeof(Texture2D), false);
 
-            UnityEngine.Object displayTarget = uvVisualTargetSelection;
-            UnityEngine.Object newTarget = EditorGUILayout.ObjectField("Malla objetivo", displayTarget, typeof(UnityEngine.Object), true);
-            if (newTarget != displayTarget && TryAssignUvVisualTarget(newTarget))
-            {
-                ResetUvVisualTargetCache();
-                ResetUvVisualTransform();
-                Repaint();
-            }
+            DrawUvVisualTargetControls();
 
             Mesh mesh = GetUvVisualMesh();
 
@@ -861,6 +880,11 @@ namespace JaimeCamacho.VAT.Editor
 
                     using (new EditorGUI.DisabledScope(uvVisualGeneratedAtlas == null))
                     {
+                        if (GUILayout.Button("Exportar atlas"))
+                        {
+                            ExportUvVisualReferenceAtlas();
+                        }
+
                         if (GUILayout.Button("Limpiar atlas generado"))
                         {
                             if (uvVisualGeneratedAtlas != null)
@@ -891,11 +915,274 @@ namespace JaimeCamacho.VAT.Editor
             EditorGUILayout.EndFoldoutHeaderGroup();
         }
 
+        private void DrawUvVisualTargetControls()
+        {
+            EditorGUILayout.LabelField("Mallas objetivo", EditorStyles.boldLabel);
+
+            if (uvVisualTargets.Count == 0)
+            {
+                EditorGUILayout.HelpBox("Agrega una o varias mallas para visualizar y transformar sus UV.", MessageType.Info);
+            }
+
+            for (int i = 0; i < uvVisualTargets.Count; i++)
+            {
+                if (DrawUvVisualTargetRow(i))
+                {
+                    // La lista se ha modificado dentro de la fila, por lo que debemos detenernos.
+                    break;
+                }
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                uvVisualNewTargetCandidate = EditorGUILayout.ObjectField("Añadir malla objetivo", uvVisualNewTargetCandidate, typeof(UnityEngine.Object), true);
+
+                using (new EditorGUI.DisabledScope(uvVisualNewTargetCandidate == null))
+                {
+                    if (GUILayout.Button("Agregar", GUILayout.Width(80f)))
+                    {
+                        if (TryAddUvVisualTarget(uvVisualNewTargetCandidate))
+                        {
+                            uvVisualNewTargetCandidate = null;
+                        }
+                    }
+                }
+            }
+        }
+
+        private bool DrawUvVisualTargetRow(int index)
+        {
+            if (index < 0 || index >= uvVisualTargets.Count)
+            {
+                return false;
+            }
+
+            UvVisualTargetEntry entry = uvVisualTargets[index];
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                bool wasActive = uvVisualActiveTargetIndex == index;
+                bool newActive = GUILayout.Toggle(wasActive, GUIContent.none, EditorStyles.radioButton, GUILayout.Width(20f));
+                if (newActive && !wasActive)
+                {
+                    SetActiveUvVisualTarget(index);
+                }
+
+                UnityEngine.Object displayTarget = GetUvVisualTargetDisplayObject(entry);
+                UnityEngine.Object updatedTarget = EditorGUILayout.ObjectField(displayTarget, typeof(UnityEngine.Object), true);
+
+                if (updatedTarget != displayTarget)
+                {
+                    if (TryPopulateUvVisualTargetEntry(entry, updatedTarget))
+                    {
+                        if (!entry.HasValidRenderer)
+                        {
+                            RemoveUvVisualTargetAt(index);
+                            return true;
+                        }
+
+                        if (uvVisualActiveTargetIndex == index)
+                        {
+                            ResetUvVisualTargetCache();
+                            Repaint();
+                        }
+                    }
+                    else
+                    {
+                        Repaint();
+                    }
+                }
+
+                if (GUILayout.Button("X", GUILayout.Width(22f)))
+                {
+                    RemoveUvVisualTargetAt(index);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryAddUvVisualTarget(UnityEngine.Object candidate)
+        {
+            if (candidate == null)
+            {
+                return false;
+            }
+
+            var entry = new UvVisualTargetEntry();
+            if (!TryPopulateUvVisualTargetEntry(entry, candidate) || !entry.HasValidRenderer)
+            {
+                return false;
+            }
+
+            uvVisualTargets.Add(entry);
+            SetActiveUvVisualTarget(uvVisualTargets.Count - 1);
+
+            return true;
+        }
+
+        private void RemoveUvVisualTargetAt(int index)
+        {
+            if (index < 0 || index >= uvVisualTargets.Count)
+            {
+                return;
+            }
+
+            bool removingActive = uvVisualActiveTargetIndex == index;
+
+            uvVisualTargets.RemoveAt(index);
+
+            if (uvVisualTargets.Count == 0)
+            {
+                uvVisualActiveTargetIndex = -1;
+                ResetUvVisualTargetCache();
+                Repaint();
+                return;
+            }
+
+            if (removingActive)
+            {
+                int newIndex = Mathf.Clamp(index, 0, uvVisualTargets.Count - 1);
+                uvVisualActiveTargetIndex = -1;
+                SetActiveUvVisualTarget(newIndex);
+            }
+            else if (uvVisualActiveTargetIndex > index)
+            {
+                uvVisualActiveTargetIndex = Mathf.Clamp(uvVisualActiveTargetIndex - 1, 0, uvVisualTargets.Count - 1);
+            }
+        }
+
+        private void SetActiveUvVisualTarget(int index)
+        {
+            if (index < 0 || index >= uvVisualTargets.Count)
+            {
+                uvVisualActiveTargetIndex = -1;
+                ResetUvVisualTargetCache();
+                Repaint();
+                return;
+            }
+
+            if (uvVisualActiveTargetIndex == index)
+            {
+                return;
+            }
+
+            uvVisualActiveTargetIndex = index;
+            ResetUvVisualTargetCache();
+            Repaint();
+        }
+
+        private UvVisualTargetEntry GetActiveUvVisualTarget()
+        {
+            if (uvVisualActiveTargetIndex < 0 || uvVisualActiveTargetIndex >= uvVisualTargets.Count)
+            {
+                return null;
+            }
+
+            UvVisualTargetEntry entry = uvVisualTargets[uvVisualActiveTargetIndex];
+            if (entry == null || !entry.HasValidRenderer)
+            {
+                return null;
+            }
+
+            return entry;
+        }
+
+        private static UnityEngine.Object GetUvVisualTargetDisplayObject(UvVisualTargetEntry entry)
+        {
+            if (entry == null)
+            {
+                return null;
+            }
+
+            if (entry.selectionOverride != null)
+            {
+                return entry.selectionOverride;
+            }
+
+            if (entry.skinnedMeshRenderer != null)
+            {
+                return entry.skinnedMeshRenderer;
+            }
+
+            return entry.meshFilter;
+        }
+
+        private bool TryPopulateUvVisualTargetEntry(UvVisualTargetEntry entry, UnityEngine.Object newTarget)
+        {
+            if (entry == null)
+            {
+                return false;
+            }
+
+            if (newTarget == null)
+            {
+                entry.meshFilter = null;
+                entry.skinnedMeshRenderer = null;
+                entry.selectionOverride = null;
+                return true;
+            }
+
+            MeshFilter meshFilter = null;
+            SkinnedMeshRenderer skinnedMeshRenderer = null;
+            UnityEngine.Object selectionObject = null;
+
+            if (newTarget is MeshFilter directMeshFilter)
+            {
+                meshFilter = directMeshFilter;
+                selectionObject = directMeshFilter;
+            }
+            else if (newTarget is SkinnedMeshRenderer directSkinnedMesh)
+            {
+                skinnedMeshRenderer = directSkinnedMesh;
+                selectionObject = directSkinnedMesh;
+            }
+            else if (newTarget is GameObject go)
+            {
+                if (!TryFindUvVisualTargetInGameObject(go, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{go.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = go;
+            }
+            else if (newTarget is Component component)
+            {
+                GameObject componentGameObject = component.gameObject;
+
+                if (!TryFindUvVisualTargetInGameObject(componentGameObject, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{componentGameObject.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = componentGameObject;
+            }
+            else
+            {
+                ReportStatus("Selecciona un MeshFilter, SkinnedMeshRenderer o un GameObject que los contenga.", MessageType.Warning, false);
+                return false;
+            }
+
+            if (!(newTarget is MeshFilter) && skinnedMeshRenderer != null)
+            {
+                meshFilter = null;
+            }
+
+            entry.meshFilter = meshFilter;
+            entry.skinnedMeshRenderer = skinnedMeshRenderer;
+            entry.selectionOverride = selectionObject ?? newTarget;
+
+            return true;
+        }
+
         private void DrawUvVisualDiagnostics(Mesh mesh)
         {
-            if (uvVisualTargetMeshFilter == null && uvVisualTargetSkinnedMeshRenderer == null)
+            if (GetActiveUvVisualTarget() == null)
             {
-                DrawMessageCard("Selecciona una malla", "Asigna un Mesh Filter, Skinned Mesh Renderer o un objeto que los contenga para visualizar y transformar sus UV.", MessageType.Info);
+                DrawMessageCard("Selecciona una malla", "Asigna uno o varios Mesh Filters, Skinned Mesh Renderers u objetos que los contengan para visualizar y transformar sus UV.", MessageType.Info);
             }
             else if (mesh == null)
             {
@@ -1000,6 +1287,59 @@ namespace JaimeCamacho.VAT.Editor
 
             ReportStatus($"Atlas de referencia generado con {textureCount} imágenes ({atlasWidth}x{atlasHeight} píxeles).", MessageType.Info, false);
             Repaint();
+        }
+
+        private void ExportUvVisualReferenceAtlas()
+        {
+            if (uvVisualGeneratedAtlas == null)
+            {
+                ReportStatus("No hay un atlas generado para exportar.", MessageType.Warning);
+                return;
+            }
+
+            string defaultName = string.IsNullOrEmpty(uvVisualGeneratedAtlas.name) ? "VAT_UV_ReferenceAtlas" : uvVisualGeneratedAtlas.name;
+            string path = EditorUtility.SaveFilePanelInProject("Exportar atlas de referencia", $"{defaultName}.png", "png", "Selecciona la ubicación dentro de la carpeta Assets para guardar el atlas generado.");
+
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            byte[] pngData = uvVisualGeneratedAtlas.EncodeToPNG();
+            if (pngData == null || pngData.Length == 0)
+            {
+                ReportStatus("No se pudo codificar el atlas generado en formato PNG.", MessageType.Error);
+                return;
+            }
+
+            try
+            {
+                File.WriteAllBytes(path, pngData);
+            }
+            catch (Exception e)
+            {
+                ReportStatus($"No se pudo guardar el atlas en disco: {e.Message}", MessageType.Error);
+                return;
+            }
+
+            AssetDatabase.ImportAsset(path);
+
+            if (AssetImporter.GetAtPath(path) is TextureImporter importer)
+            {
+                importer.wrapMode = TextureWrapMode.Clamp;
+                importer.filterMode = FilterMode.Bilinear;
+                importer.textureCompression = TextureImporterCompression.Uncompressed;
+                importer.SaveAndReimport();
+            }
+
+            Texture2D exportedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (exportedTexture != null)
+            {
+                uvVisualReferenceTexture = exportedTexture;
+            }
+
+            Repaint();
+            ReportStatus($"Atlas exportado correctamente a \"{path}\".", MessageType.Info);
         }
 
         private static void CopyTextureToAtlas(Texture2D source, Texture2D atlas, int offsetX, int offsetY, int targetResolution)
@@ -1265,23 +1605,21 @@ namespace JaimeCamacho.VAT.Editor
 
         private Mesh GetUvVisualMesh()
         {
-            Mesh mesh = null;
-
-            if (uvVisualTargetMeshFilter != null)
+            UvVisualTargetEntry activeTarget = GetActiveUvVisualTarget();
+            if (activeTarget == null)
             {
-                mesh = uvVisualTargetMeshFilter.sharedMesh;
-            }
-            else if (uvVisualTargetSkinnedMeshRenderer != null)
-            {
-                mesh = uvVisualTargetSkinnedMeshRenderer.sharedMesh;
-            }
-            else
-            {
+                uvVisualOriginalUvs = null;
+                uvVisualInitialUvs = null;
+                uvVisualLastMesh = null;
                 return null;
             }
 
+            Mesh mesh = activeTarget.SharedMesh;
             if (mesh == null)
             {
+                uvVisualOriginalUvs = null;
+                uvVisualInitialUvs = null;
+                uvVisualLastMesh = null;
                 return null;
             }
 
@@ -1304,8 +1642,8 @@ namespace JaimeCamacho.VAT.Editor
 
         private void ApplyUvVisualTransform(Mesh mesh)
         {
-            mesh ??= GetUvVisualMesh();
-            if (mesh == null)
+            Mesh previewMesh = mesh ?? GetUvVisualMesh();
+            if (previewMesh == null)
             {
                 ReportStatus("Selecciona una malla válida para aplicar la transformación UV.", MessageType.Warning);
                 return;
@@ -1317,21 +1655,69 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
-            Vector2[] transformed = (Vector2[])uvVisualOriginalUvs.Clone();
             Matrix4x4 transformMatrix = Matrix4x4.TRS(uvVisualPosition, Quaternion.Euler(0f, 0f, uvVisualRotation), uvVisualScale);
+            var processedMeshes = new HashSet<Mesh>();
+            int affectedCount = 0;
 
-            Undo.RecordObject(mesh, "Aplicar transformación UV");
-
-            for (int i = 0; i < transformed.Length; i++)
+            foreach (UvVisualTargetEntry entry in uvVisualTargets)
             {
-                Vector3 result = transformMatrix.MultiplyPoint3x4(new Vector3(transformed[i].x, transformed[i].y, 0f));
-                transformed[i] = new Vector2(result.x, result.y);
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                Mesh targetMesh = entry.SharedMesh;
+                if (targetMesh == null || processedMeshes.Contains(targetMesh))
+                {
+                    continue;
+                }
+
+                Vector2[] sourceUvs;
+                if (targetMesh == previewMesh)
+                {
+                    sourceUvs = (Vector2[])uvVisualOriginalUvs.Clone();
+                }
+                else
+                {
+                    Vector2[] meshUvs = targetMesh.uv;
+                    if (meshUvs == null || meshUvs.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    sourceUvs = (Vector2[])meshUvs.Clone();
+                }
+
+                Vector2[] transformed = new Vector2[sourceUvs.Length];
+                for (int i = 0; i < sourceUvs.Length; i++)
+                {
+                    Vector3 result = transformMatrix.MultiplyPoint3x4(new Vector3(sourceUvs[i].x, sourceUvs[i].y, 0f));
+                    transformed[i] = new Vector2(result.x, result.y);
+                }
+
+                Undo.RecordObject(targetMesh, "Aplicar transformación UV");
+                targetMesh.uv = transformed;
+                EditorUtility.SetDirty(targetMesh);
+
+                if (targetMesh == previewMesh)
+                {
+                    uvVisualOriginalUvs = (Vector2[])transformed.Clone();
+                }
+
+                processedMeshes.Add(targetMesh);
+                affectedCount++;
             }
 
-            mesh.uv = transformed;
-            EditorUtility.SetDirty(mesh);
+            if (affectedCount == 0)
+            {
+                ReportStatus("No se encontraron mallas válidas para aplicar la transformación UV.", MessageType.Warning);
+                return;
+            }
 
-            uvVisualOriginalUvs = (Vector2[])transformed.Clone();
+            uvVisualPosition = Vector2.zero;
+            uvVisualScale = Vector2.one;
+            uvVisualRotation = 0f;
+            Repaint();
 
             uvVisualPosition = Vector2.zero;
             uvVisualScale = Vector2.one;
