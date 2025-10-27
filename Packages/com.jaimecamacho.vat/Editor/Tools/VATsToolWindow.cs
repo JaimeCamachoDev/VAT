@@ -33,7 +33,11 @@ namespace JaimeCamacho.VAT.Editor
         private static readonly Dictionary<MessageType, GUIContent> messageIcons = new Dictionary<MessageType, GUIContent>();
 
         private Texture2D uvVisualReferenceTexture;
+        private Texture2D uvVisualGeneratedAtlas;
+        private UnityEngine.Object uvVisualTargetSelection;
         private MeshFilter uvVisualTargetMeshFilter;
+        private SkinnedMeshRenderer uvVisualTargetSkinnedMeshRenderer;
+        private Mesh uvVisualTargetMeshAsset;
         private Mesh uvVisualLastMesh;
         private Vector2 uvVisualPosition;
         private Vector2 uvVisualScale = Vector2.one;
@@ -44,6 +48,29 @@ namespace JaimeCamacho.VAT.Editor
         private bool uvVisualIsDragging;
         private Vector2 uvVisualDragStartMousePos;
         private Vector2 uvVisualDragStartUvPos;
+
+        private bool uvVisualShowAtlasBuilder = true;
+        private int uvVisualAtlasImageCount = 1;
+        private int uvVisualAtlasCellResolution = 256;
+        private readonly List<Texture2D> uvVisualAtlasSourceTextures = new List<Texture2D>();
+
+        private static readonly string[] k_UvVisualAtlasResolutionLabels =
+        {
+            "64 x 64",
+            "128 x 128",
+            "256 x 256",
+            "512 x 512",
+            "1024 x 1024"
+        };
+
+        private static readonly int[] k_UvVisualAtlasResolutionSizes =
+        {
+            64,
+            128,
+            256,
+            512,
+            1024
+        };
 
         private const string k_PaintRootName = "VATPaintRoot";
         private static readonly Color k_BrushFillColor = new Color(0f, 0.5f, 1f, 0.25f);
@@ -160,6 +187,17 @@ namespace JaimeCamacho.VAT.Editor
             if (painterPaintingMode)
             {
                 TogglePaintingMode(false);
+            }
+
+            if (uvVisualGeneratedAtlas != null)
+            {
+                if (uvVisualReferenceTexture == uvVisualGeneratedAtlas)
+                {
+                    uvVisualReferenceTexture = null;
+                }
+
+                DestroyImmediate(uvVisualGeneratedAtlas);
+                uvVisualGeneratedAtlas = null;
             }
         }
 
@@ -593,12 +631,14 @@ namespace JaimeCamacho.VAT.Editor
 
             DrawMessageCard("Consejos de uso", "Haz clic y arrastra en la vista previa para desplazar las UV. Mientras arrastras usa la rueda del ratón para escalar y emplea el control de rotación para giros precisos.", MessageType.Info);
 
+            DrawUvVisualAtlasBuilder();
+
             uvVisualReferenceTexture = (Texture2D)EditorGUILayout.ObjectField("Textura de referencia", uvVisualReferenceTexture, typeof(Texture2D), false);
 
-            MeshFilter newTarget = (MeshFilter)EditorGUILayout.ObjectField("Mesh Filter objetivo", uvVisualTargetMeshFilter, typeof(MeshFilter), true);
-            if (newTarget != uvVisualTargetMeshFilter)
+            UnityEngine.Object displayTarget = uvVisualTargetSelection;
+            UnityEngine.Object newTarget = EditorGUILayout.ObjectField("Malla objetivo", displayTarget, typeof(UnityEngine.Object), true);
+            if (newTarget != displayTarget && TryAssignUvVisualTarget(newTarget))
             {
-                uvVisualTargetMeshFilter = newTarget;
                 ResetUvVisualTargetCache();
                 ResetUvVisualTransform();
                 Repaint();
@@ -685,15 +725,80 @@ namespace JaimeCamacho.VAT.Editor
             }
         }
 
+        private void DrawUvVisualAtlasBuilder()
+        {
+            uvVisualShowAtlasBuilder = EditorGUILayout.BeginFoldoutHeaderGroup(uvVisualShowAtlasBuilder, "Generador de atlas de referencia");
+            if (uvVisualShowAtlasBuilder)
+            {
+                EditorGUILayout.HelpBox("Crea una textura de referencia combinando varias imágenes individuales. El atlas generado se asignará automáticamente al control de textura de referencia.", MessageType.None);
+
+                int newCount = EditorGUILayout.IntSlider("Número de imágenes", uvVisualAtlasImageCount, 1, 16);
+                if (newCount != uvVisualAtlasImageCount)
+                {
+                    uvVisualAtlasImageCount = newCount;
+                    EnsureUvVisualAtlasSourceListSize();
+                }
+
+                EnsureUvVisualAtlasSourceListSize();
+
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    for (int i = 0; i < uvVisualAtlasSourceTextures.Count; i++)
+                    {
+                        uvVisualAtlasSourceTextures[i] = (Texture2D)EditorGUILayout.ObjectField($"Imagen {i + 1}", uvVisualAtlasSourceTextures[i], typeof(Texture2D), false);
+                    }
+                }
+
+                uvVisualAtlasCellResolution = EditorGUILayout.IntPopup("Resolución por imagen", uvVisualAtlasCellResolution, k_UvVisualAtlasResolutionLabels, k_UvVisualAtlasResolutionSizes);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button("Generar atlas de referencia"))
+                    {
+                        GenerateUvVisualReferenceAtlas();
+                    }
+
+                    using (new EditorGUI.DisabledScope(uvVisualGeneratedAtlas == null))
+                    {
+                        if (GUILayout.Button("Limpiar atlas generado"))
+                        {
+                            if (uvVisualGeneratedAtlas != null)
+                            {
+                                if (uvVisualReferenceTexture == uvVisualGeneratedAtlas)
+                                {
+                                    uvVisualReferenceTexture = null;
+                                }
+
+                                DestroyImmediate(uvVisualGeneratedAtlas);
+                                uvVisualGeneratedAtlas = null;
+                            }
+
+                            Repaint();
+                        }
+                    }
+                }
+
+                if (uvVisualGeneratedAtlas != null)
+                {
+                    float atlasAspect = (float)uvVisualGeneratedAtlas.width / uvVisualGeneratedAtlas.height;
+                    Rect atlasPreviewRect = GUILayoutUtility.GetAspectRect(atlasAspect, GUILayout.MaxHeight(256f), GUILayout.ExpandWidth(true));
+                    EditorGUI.DrawPreviewTexture(atlasPreviewRect, uvVisualGeneratedAtlas, null, ScaleMode.ScaleToFit);
+                    EditorGUILayout.HelpBox($"Atlas generado: {uvVisualGeneratedAtlas.width}x{uvVisualGeneratedAtlas.height} píxeles.", MessageType.Info);
+                }
+            }
+
+            EditorGUILayout.EndFoldoutHeaderGroup();
+        }
+
         private void DrawUvVisualDiagnostics(Mesh mesh)
         {
-            if (uvVisualTargetMeshFilter == null)
+            if (uvVisualTargetMeshFilter == null && uvVisualTargetSkinnedMeshRenderer == null && uvVisualTargetMeshAsset == null)
             {
-                DrawMessageCard("Selecciona una malla", "Asigna un Mesh Filter con coordenadas UV para visualizar y transformarlas.", MessageType.Info);
+                DrawMessageCard("Selecciona una malla", "Asigna un Mesh Filter, Skinned Mesh Renderer, un objeto que los contenga o una malla directa para visualizar y transformar sus UV.", MessageType.Info);
             }
             else if (mesh == null)
             {
-                DrawMessageCard("Malla no válida", "El Mesh Filter seleccionado no tiene una malla compartida.", MessageType.Warning);
+                DrawMessageCard("Malla no válida", "El objeto seleccionado no tiene una malla compartida.", MessageType.Warning);
             }
             else if (mesh.uv == null || mesh.uv.Length == 0)
             {
@@ -704,6 +809,226 @@ namespace JaimeCamacho.VAT.Editor
             {
                 DrawMessageCard("Textura de referencia", "Asigna una textura para visualizar la alineación de las UV (opcional pero recomendado).", MessageType.Info);
             }
+        }
+
+        private bool TryAssignUvVisualTarget(UnityEngine.Object selection)
+        {
+            if (selection == null)
+            {
+                bool hadTarget = uvVisualTargetSelection != null
+                    || uvVisualTargetMeshFilter != null
+                    || uvVisualTargetSkinnedMeshRenderer != null
+                    || uvVisualTargetMeshAsset != null;
+
+                uvVisualTargetSelection = null;
+                uvVisualTargetMeshFilter = null;
+                uvVisualTargetSkinnedMeshRenderer = null;
+                uvVisualTargetMeshAsset = null;
+
+                return hadTarget;
+            }
+
+            MeshFilter resolvedMeshFilter = null;
+            SkinnedMeshRenderer resolvedSkinnedRenderer = null;
+            Mesh resolvedMeshAsset = null;
+            UnityEngine.Object resolvedSelection = selection;
+
+            if (selection is MeshFilter meshFilter)
+            {
+                resolvedMeshFilter = meshFilter;
+            }
+            else if (selection is SkinnedMeshRenderer skinnedMeshRenderer)
+            {
+                resolvedSkinnedRenderer = skinnedMeshRenderer;
+            }
+            else if (selection is Mesh mesh)
+            {
+                resolvedMeshAsset = mesh;
+            }
+            else if (selection is GameObject go)
+            {
+                resolvedMeshFilter = go.GetComponent<MeshFilter>();
+                resolvedSkinnedRenderer = go.GetComponent<SkinnedMeshRenderer>();
+
+                if (resolvedMeshFilter == null && resolvedSkinnedRenderer == null)
+                {
+                    resolvedMeshFilter = go.GetComponentInChildren<MeshFilter>();
+                    resolvedSkinnedRenderer = go.GetComponentInChildren<SkinnedMeshRenderer>();
+                }
+
+                if (resolvedMeshFilter == null && resolvedSkinnedRenderer == null)
+                {
+                    ReportStatus("El objeto seleccionado no contiene un Mesh Filter ni un Skinned Mesh Renderer en él ni en sus hijos.", MessageType.Warning);
+                    return false;
+                }
+            }
+            else if (selection is Component component)
+            {
+                return TryAssignUvVisualTarget(component.gameObject);
+            }
+            else
+            {
+                ReportStatus("Selecciona un Mesh Filter, Skinned Mesh Renderer, GameObject que los contenga o una malla directamente.", MessageType.Warning);
+                return false;
+            }
+
+            if (resolvedMeshFilter == null && resolvedSkinnedRenderer == null && resolvedMeshAsset == null)
+            {
+                ReportStatus("El objeto seleccionado no contiene un Mesh Filter ni un Skinned Mesh Renderer en él ni en sus hijos.", MessageType.Warning);
+                return false;
+            }
+
+            bool changed = uvVisualTargetMeshFilter != resolvedMeshFilter
+                || uvVisualTargetSkinnedMeshRenderer != resolvedSkinnedRenderer
+                || uvVisualTargetMeshAsset != resolvedMeshAsset
+                || uvVisualTargetSelection != resolvedSelection;
+
+            uvVisualTargetSelection = resolvedSelection;
+            uvVisualTargetMeshFilter = resolvedMeshFilter;
+            uvVisualTargetSkinnedMeshRenderer = resolvedSkinnedRenderer;
+            uvVisualTargetMeshAsset = resolvedMeshAsset;
+
+            return changed;
+        }
+
+        private void EnsureUvVisualAtlasSourceListSize()
+        {
+            if (uvVisualAtlasImageCount < 1)
+            {
+                uvVisualAtlasImageCount = 1;
+            }
+
+            while (uvVisualAtlasSourceTextures.Count < uvVisualAtlasImageCount)
+            {
+                uvVisualAtlasSourceTextures.Add(null);
+            }
+
+            while (uvVisualAtlasSourceTextures.Count > uvVisualAtlasImageCount)
+            {
+                uvVisualAtlasSourceTextures.RemoveAt(uvVisualAtlasSourceTextures.Count - 1);
+            }
+        }
+
+        private void GenerateUvVisualReferenceAtlas()
+        {
+            EnsureUvVisualAtlasSourceListSize();
+
+            if (uvVisualAtlasSourceTextures.Count == 0)
+            {
+                ReportStatus("Asigna al menos una imagen para generar el atlas de referencia.", MessageType.Warning);
+                return;
+            }
+
+            foreach (Texture2D source in uvVisualAtlasSourceTextures)
+            {
+                if (source == null)
+                {
+                    ReportStatus("Todos los espacios de imagen deben estar asignados antes de generar el atlas.", MessageType.Warning);
+                    return;
+                }
+
+                if (!IsTextureReadable(source, out string reason))
+                {
+                    ReportStatus(reason, MessageType.Error);
+                    return;
+                }
+            }
+
+            int cellResolution = Mathf.Max(1, uvVisualAtlasCellResolution);
+            int textureCount = uvVisualAtlasSourceTextures.Count;
+            int columns = Mathf.CeilToInt(Mathf.Sqrt(textureCount));
+            int rows = Mathf.CeilToInt((float)textureCount / columns);
+            int atlasWidth = Mathf.Max(1, columns * cellResolution);
+            int atlasHeight = Mathf.Max(1, rows * cellResolution);
+
+            Texture2D atlas = new Texture2D(atlasWidth, atlasHeight, TextureFormat.RGBA32, false)
+            {
+                name = "VAT_UV_ReferenceAtlas",
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear,
+                hideFlags = HideFlags.HideAndDontSave
+            };
+
+            Color32[] clearPixels = new Color32[atlasWidth * atlasHeight];
+            for (int i = 0; i < clearPixels.Length; i++)
+            {
+                clearPixels[i] = new Color32(0, 0, 0, 0);
+            }
+
+            atlas.SetPixels32(clearPixels);
+
+            for (int index = 0; index < textureCount; index++)
+            {
+                int column = index % columns;
+                int row = index / columns;
+                int offsetX = column * cellResolution;
+                int offsetY = row * cellResolution;
+
+                CopyTextureToAtlas(uvVisualAtlasSourceTextures[index], atlas, offsetX, offsetY, cellResolution);
+            }
+
+            atlas.Apply();
+
+            if (uvVisualGeneratedAtlas != null)
+            {
+                DestroyImmediate(uvVisualGeneratedAtlas);
+            }
+
+            uvVisualGeneratedAtlas = atlas;
+            uvVisualReferenceTexture = uvVisualGeneratedAtlas;
+
+            ReportStatus($"Atlas de referencia generado con {textureCount} imágenes ({atlasWidth}x{atlasHeight} píxeles).", MessageType.Info, false);
+            Repaint();
+        }
+
+        private static void CopyTextureToAtlas(Texture2D source, Texture2D atlas, int offsetX, int offsetY, int targetResolution)
+        {
+            int maxX = Mathf.Min(targetResolution, atlas.width - offsetX);
+            int maxY = Mathf.Min(targetResolution, atlas.height - offsetY);
+
+            for (int y = 0; y < maxY; y++)
+            {
+                float v = targetResolution > 1 ? (float)y / (targetResolution - 1) : 0f;
+
+                for (int x = 0; x < maxX; x++)
+                {
+                    float u = targetResolution > 1 ? (float)x / (targetResolution - 1) : 0f;
+                    Color sampled = source.GetPixelBilinear(u, v);
+                    atlas.SetPixel(offsetX + x, offsetY + y, sampled);
+                }
+            }
+        }
+
+        private static bool IsTextureReadable(Texture2D texture, out string reason)
+        {
+            reason = string.Empty;
+
+            if (texture == null)
+            {
+                reason = "La textura proporcionada es nula.";
+                return false;
+            }
+
+            if (texture.isReadable)
+            {
+                return true;
+            }
+
+            string assetPath = AssetDatabase.GetAssetPath(texture);
+            if (!string.IsNullOrEmpty(assetPath))
+            {
+                if (AssetImporter.GetAtPath(assetPath) is TextureImporter importer)
+                {
+                    if (!importer.isReadable)
+                    {
+                        reason = $"La textura '{texture.name}' no es legible. Habilita la opción Read/Write en su importador para poder generar el atlas.";
+                        return false;
+                    }
+                }
+            }
+
+            reason = $"La textura '{texture.name}' no permite lectura en modo de edición.";
+            return false;
         }
 
         private static void DrawUvVisualBackground(Rect rect)
@@ -919,12 +1244,25 @@ namespace JaimeCamacho.VAT.Editor
 
         private Mesh GetUvVisualMesh()
         {
-            if (uvVisualTargetMeshFilter == null)
+            Mesh mesh = null;
+
+            if (uvVisualTargetMeshFilter != null)
+            {
+                mesh = uvVisualTargetMeshFilter.sharedMesh;
+            }
+            else if (uvVisualTargetSkinnedMeshRenderer != null)
+            {
+                mesh = uvVisualTargetSkinnedMeshRenderer.sharedMesh;
+            }
+            else if (uvVisualTargetMeshAsset != null)
+            {
+                mesh = uvVisualTargetMeshAsset;
+            }
+            else
             {
                 return null;
             }
 
-            Mesh mesh = uvVisualTargetMeshFilter.sharedMesh;
             if (mesh == null)
             {
                 return null;
@@ -952,7 +1290,7 @@ namespace JaimeCamacho.VAT.Editor
             mesh ??= GetUvVisualMesh();
             if (mesh == null)
             {
-                ReportStatus("Selecciona un Mesh Filter válido para aplicar la transformación UV.", MessageType.Warning);
+                ReportStatus("Selecciona una malla válida para aplicar la transformación UV.", MessageType.Warning);
                 return;
             }
 
