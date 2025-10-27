@@ -35,6 +35,9 @@ namespace JaimeCamacho.VAT.Editor
 
         private Texture2D uvVisualReferenceTexture;
         private Texture2D uvVisualGeneratedAtlas;
+        private MeshFilter uvVisualTargetMeshFilter;
+        private SkinnedMeshRenderer uvVisualTargetSkinnedMeshRenderer;
+        private UnityEngine.Object uvVisualTargetSelectionOverride;
         private Mesh uvVisualLastMesh;
         private Vector2 uvVisualPosition;
         private Vector2 uvVisualScale = Vector2.one;
@@ -742,6 +745,88 @@ namespace JaimeCamacho.VAT.Editor
             }
         }
 
+        private UnityEngine.Object uvVisualTargetSelection
+        {
+            get
+            {
+                if (uvVisualTargetSelectionOverride != null)
+                {
+                    return uvVisualTargetSelectionOverride;
+                }
+
+                if (uvVisualTargetSkinnedMeshRenderer != null)
+                {
+                    return uvVisualTargetSkinnedMeshRenderer;
+                }
+
+                return uvVisualTargetMeshFilter;
+            }
+        }
+
+        private bool TryAssignUvVisualTarget(UnityEngine.Object newTarget)
+        {
+            if (newTarget == null)
+            {
+                uvVisualTargetMeshFilter = null;
+                uvVisualTargetSkinnedMeshRenderer = null;
+                uvVisualTargetSelectionOverride = null;
+                return true;
+            }
+
+            MeshFilter meshFilter = null;
+            SkinnedMeshRenderer skinnedMeshRenderer = null;
+            UnityEngine.Object selectionObject = null;
+
+            if (newTarget is MeshFilter directMeshFilter)
+            {
+                meshFilter = directMeshFilter;
+                selectionObject = directMeshFilter;
+            }
+            else if (newTarget is SkinnedMeshRenderer directSkinnedMesh)
+            {
+                skinnedMeshRenderer = directSkinnedMesh;
+                selectionObject = directSkinnedMesh;
+            }
+            else if (newTarget is GameObject go)
+            {
+                if (!TryFindUvVisualTargetInGameObject(go, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{go.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = go;
+            }
+            else if (newTarget is Component component)
+            {
+                GameObject componentGameObject = component.gameObject;
+
+                if (!TryFindUvVisualTargetInGameObject(componentGameObject, out meshFilter, out skinnedMeshRenderer))
+                {
+                    ReportStatus($"\"{componentGameObject.name}\" no contiene un MeshFilter ni un SkinnedMeshRenderer en su jerarquía.", MessageType.Warning, false);
+                    return false;
+                }
+
+                selectionObject = componentGameObject;
+            }
+            else
+            {
+                ReportStatus("Selecciona un MeshFilter, SkinnedMeshRenderer o un GameObject que los contenga.", MessageType.Warning, false);
+                return false;
+            }
+
+            if (!(newTarget is MeshFilter) && skinnedMeshRenderer != null)
+            {
+                meshFilter = null;
+            }
+
+            uvVisualTargetMeshFilter = meshFilter;
+            uvVisualTargetSkinnedMeshRenderer = skinnedMeshRenderer;
+            uvVisualTargetSelectionOverride = selectionObject ?? newTarget;
+
+            return true;
+        }
+
         private static bool TryFindUvVisualTargetInGameObject(GameObject candidate, out MeshFilter meshFilter, out SkinnedMeshRenderer skinnedMeshRenderer)
         {
             meshFilter = null;
@@ -1244,26 +1329,13 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
-            if (!IsUvVisualAtlasExportPathValid())
-            {
-                ReportStatus("La carpeta de exportación debe estar dentro de la carpeta Assets del proyecto.", MessageType.Warning);
-                return;
-            }
-
-            if (!EnsureDirectoryExists(uvVisualAtlasExportFolder))
-            {
-                return;
-            }
-
             string defaultName = string.IsNullOrEmpty(uvVisualGeneratedAtlas.name) ? "VAT_UV_ReferenceAtlas" : uvVisualGeneratedAtlas.name;
-            string sanitizedName = SanitizeFileName(Path.GetFileNameWithoutExtension(defaultName));
-            if (string.IsNullOrEmpty(sanitizedName))
-            {
-                sanitizedName = "VAT_UV_ReferenceAtlas";
-            }
+            string path = EditorUtility.SaveFilePanelInProject("Exportar atlas de referencia", $"{defaultName}.png", "png", "Selecciona la ubicación dentro de la carpeta Assets para guardar el atlas generado.");
 
-            string basePath = Path.Combine(uvVisualAtlasExportFolder, sanitizedName + ".png").Replace("\\", "/");
-            string path = AssetDatabase.GenerateUniqueAssetPath(basePath);
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
 
             byte[] pngData = uvVisualGeneratedAtlas.EncodeToPNG();
             if (pngData == null || pngData.Length == 0)
@@ -1300,38 +1372,6 @@ namespace JaimeCamacho.VAT.Editor
 
             Repaint();
             ReportStatus($"Atlas exportado correctamente a \"{path}\".", MessageType.Info);
-        }
-
-        private bool IsUvVisualAtlasExportPathValid()
-        {
-            if (string.IsNullOrEmpty(uvVisualAtlasExportFolder))
-            {
-                return false;
-            }
-
-            if (!uvVisualAtlasExportFolder.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            return IsProjectRelativeFolder(uvVisualAtlasExportFolder);
-        }
-
-        private static string SanitizeFileName(string name)
-        {
-            if (string.IsNullOrEmpty(name))
-            {
-                return string.Empty;
-            }
-
-            char[] invalidChars = Path.GetInvalidFileNameChars();
-            var builder = new StringBuilder(name.Length);
-            foreach (char c in name)
-            {
-                builder.Append(Array.IndexOf(invalidChars, c) >= 0 ? '_' : c);
-            }
-
-            return builder.ToString().Trim();
         }
 
         private static void CopyTextureToAtlas(Texture2D source, Texture2D atlas, int offsetX, int offsetY, int targetResolution)
@@ -1709,6 +1749,10 @@ namespace JaimeCamacho.VAT.Editor
             uvVisualPosition = Vector2.zero;
             uvVisualScale = Vector2.one;
             uvVisualRotation = 0f;
+            Repaint();
+
+            uvVisualPosition = Vector2.zero;
+            uvVisualScale = Vector2.one;
             Repaint();
 
             string message = affectedCount > 1 ? "Transformación UV aplicada a las mallas seleccionadas." : "Transformación UV aplicada correctamente.";
