@@ -34,10 +34,8 @@ namespace JaimeCamacho.VAT.Editor
 
         private Texture2D uvVisualReferenceTexture;
         private Texture2D uvVisualGeneratedAtlas;
-        private UnityEngine.Object uvVisualTargetSelection;
         private MeshFilter uvVisualTargetMeshFilter;
         private SkinnedMeshRenderer uvVisualTargetSkinnedMeshRenderer;
-        private Mesh uvVisualTargetMeshAsset;
         private Mesh uvVisualLastMesh;
         private Vector2 uvVisualPosition;
         private Vector2 uvVisualScale = Vector2.one;
@@ -792,9 +790,9 @@ namespace JaimeCamacho.VAT.Editor
 
         private void DrawUvVisualDiagnostics(Mesh mesh)
         {
-            if (uvVisualTargetMeshFilter == null && uvVisualTargetSkinnedMeshRenderer == null && uvVisualTargetMeshAsset == null)
+            if (uvVisualTargetMeshFilter == null && uvVisualTargetSkinnedMeshRenderer == null)
             {
-                DrawMessageCard("Selecciona una malla", "Asigna un Mesh Filter, Skinned Mesh Renderer, un objeto que los contenga o una malla directa para visualizar y transformar sus UV.", MessageType.Info);
+                DrawMessageCard("Selecciona una malla", "Asigna un Mesh Filter, Skinned Mesh Renderer o un objeto que los contenga para visualizar y transformar sus UV.", MessageType.Info);
             }
             else if (mesh == null)
             {
@@ -809,86 +807,6 @@ namespace JaimeCamacho.VAT.Editor
             {
                 DrawMessageCard("Textura de referencia", "Asigna una textura para visualizar la alineación de las UV (opcional pero recomendado).", MessageType.Info);
             }
-        }
-
-        private bool TryAssignUvVisualTarget(UnityEngine.Object selection)
-        {
-            if (selection == null)
-            {
-                bool hadTarget = uvVisualTargetSelection != null
-                    || uvVisualTargetMeshFilter != null
-                    || uvVisualTargetSkinnedMeshRenderer != null
-                    || uvVisualTargetMeshAsset != null;
-
-                uvVisualTargetSelection = null;
-                uvVisualTargetMeshFilter = null;
-                uvVisualTargetSkinnedMeshRenderer = null;
-                uvVisualTargetMeshAsset = null;
-
-                return hadTarget;
-            }
-
-            MeshFilter resolvedMeshFilter = null;
-            SkinnedMeshRenderer resolvedSkinnedRenderer = null;
-            Mesh resolvedMeshAsset = null;
-            UnityEngine.Object resolvedSelection = selection;
-
-            if (selection is MeshFilter meshFilter)
-            {
-                resolvedMeshFilter = meshFilter;
-            }
-            else if (selection is SkinnedMeshRenderer skinnedMeshRenderer)
-            {
-                resolvedSkinnedRenderer = skinnedMeshRenderer;
-            }
-            else if (selection is Mesh mesh)
-            {
-                resolvedMeshAsset = mesh;
-            }
-            else if (selection is GameObject go)
-            {
-                resolvedMeshFilter = go.GetComponent<MeshFilter>();
-                resolvedSkinnedRenderer = go.GetComponent<SkinnedMeshRenderer>();
-
-                if (resolvedMeshFilter == null && resolvedSkinnedRenderer == null)
-                {
-                    resolvedMeshFilter = go.GetComponentInChildren<MeshFilter>();
-                    resolvedSkinnedRenderer = go.GetComponentInChildren<SkinnedMeshRenderer>();
-                }
-
-                if (resolvedMeshFilter == null && resolvedSkinnedRenderer == null)
-                {
-                    ReportStatus("El objeto seleccionado no contiene un Mesh Filter ni un Skinned Mesh Renderer en él ni en sus hijos.", MessageType.Warning);
-                    return false;
-                }
-            }
-            else if (selection is Component component)
-            {
-                return TryAssignUvVisualTarget(component.gameObject);
-            }
-            else
-            {
-                ReportStatus("Selecciona un Mesh Filter, Skinned Mesh Renderer, GameObject que los contenga o una malla directamente.", MessageType.Warning);
-                return false;
-            }
-
-            if (resolvedMeshFilter == null && resolvedSkinnedRenderer == null && resolvedMeshAsset == null)
-            {
-                ReportStatus("El objeto seleccionado no contiene un Mesh Filter ni un Skinned Mesh Renderer en él ni en sus hijos.", MessageType.Warning);
-                return false;
-            }
-
-            bool changed = uvVisualTargetMeshFilter != resolvedMeshFilter
-                || uvVisualTargetSkinnedMeshRenderer != resolvedSkinnedRenderer
-                || uvVisualTargetMeshAsset != resolvedMeshAsset
-                || uvVisualTargetSelection != resolvedSelection;
-
-            uvVisualTargetSelection = resolvedSelection;
-            uvVisualTargetMeshFilter = resolvedMeshFilter;
-            uvVisualTargetSkinnedMeshRenderer = resolvedSkinnedRenderer;
-            uvVisualTargetMeshAsset = resolvedMeshAsset;
-
-            return changed;
         }
 
         private void EnsureUvVisualAtlasSourceListSize()
@@ -1253,10 +1171,6 @@ namespace JaimeCamacho.VAT.Editor
             else if (uvVisualTargetSkinnedMeshRenderer != null)
             {
                 mesh = uvVisualTargetSkinnedMeshRenderer.sharedMesh;
-            }
-            else if (uvVisualTargetMeshAsset != null)
-            {
-                mesh = uvVisualTargetMeshAsset;
             }
             else
             {
