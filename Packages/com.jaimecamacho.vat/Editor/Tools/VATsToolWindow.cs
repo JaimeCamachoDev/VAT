@@ -54,6 +54,7 @@ namespace JaimeCamacho.VAT.Editor
         private int uvVisualAtlasCellResolution = 256;
         private string uvVisualAtlasExportFolder = "Assets/VATAtlases";
         private string uvVisualAtlasExportFileName = "VAT_UV_ReferenceAtlas";
+        private DefaultAsset uvVisualAtlasExportFolderAsset;
         private readonly List<Texture2D> uvVisualAtlasSourceTextures = new List<Texture2D>();
         private readonly List<UvVisualTargetEntry> uvVisualTargets = new List<UvVisualTargetEntry>();
         private int uvVisualActiveTargetIndex = -1;
@@ -129,6 +130,11 @@ namespace JaimeCamacho.VAT.Editor
             public UnityEngine.Object selectionOverride;
             public MeshFilter meshFilter;
             public SkinnedMeshRenderer skinnedMeshRenderer;
+            public Color wireColor = Color.white;
+            public Vector2 storedPosition = Vector2.zero;
+            public Vector2 storedScale = Vector2.one;
+            public float storedRotation;
+            public bool hasStoredTransform;
 
             public Mesh SharedMesh
             {
@@ -901,12 +907,42 @@ namespace JaimeCamacho.VAT.Editor
 
                 uvVisualAtlasCellResolution = EditorGUILayout.IntPopup("Resolución por imagen", uvVisualAtlasCellResolution, k_UvVisualAtlasResolutionLabels, k_UvVisualAtlasResolutionSizes);
 
+                string previousExportFolder = uvVisualAtlasExportFolder;
                 Rect exportFolderRect = EditorGUILayout.GetControlRect();
                 exportFolderRect = EditorGUI.PrefixLabel(exportFolderRect, new GUIContent("Carpeta de exportación"));
-                uvVisualAtlasExportFolder = EditorGUI.TextField(exportFolderRect, uvVisualAtlasExportFolder);
+                string typedExportFolder = EditorGUI.TextField(exportFolderRect, uvVisualAtlasExportFolder);
+                if (!string.Equals(typedExportFolder, uvVisualAtlasExportFolder, StringComparison.Ordinal))
+                {
+                    uvVisualAtlasExportFolder = typedExportFolder;
+                }
                 int previousIndentLevel = EditorGUI.indentLevel;
                 HandleDragAndDrop(exportFolderRect, ref uvVisualAtlasExportFolder);
                 EditorGUI.indentLevel = previousIndentLevel;
+
+                DefaultAsset newExportFolderAsset = (DefaultAsset)EditorGUILayout.ObjectField("Carpeta de exportación (asset)", uvVisualAtlasExportFolderAsset, typeof(DefaultAsset), false);
+                if (newExportFolderAsset != uvVisualAtlasExportFolderAsset)
+                {
+                    string assetFolderPath = GetPathFromFolderAsset(newExportFolderAsset);
+                    if (!string.IsNullOrEmpty(assetFolderPath))
+                    {
+                        uvVisualAtlasExportFolder = assetFolderPath;
+                        OnUvVisualExportFolderChanged();
+                    }
+                    else
+                    {
+                        if (newExportFolderAsset != null)
+                        {
+                            ReportStatus("Selecciona una carpeta válida dentro de Assets.", MessageType.Warning, false);
+                        }
+
+                        uvVisualAtlasExportFolderAsset = null;
+                    }
+                }
+
+                if (!string.Equals(previousExportFolder, uvVisualAtlasExportFolder, StringComparison.Ordinal))
+                {
+                    OnUvVisualExportFolderChanged();
+                }
 
                 uvVisualAtlasExportFileName = EditorGUILayout.TextField("Nombre de archivo (PNG)", uvVisualAtlasExportFileName);
 
@@ -924,6 +960,7 @@ namespace JaimeCamacho.VAT.Editor
                         if (!string.IsNullOrEmpty(projectRelativePath))
                         {
                             uvVisualAtlasExportFolder = projectRelativePath;
+                            OnUvVisualExportFolderChanged();
                             Repaint();
                         }
                         else
@@ -1046,6 +1083,8 @@ namespace JaimeCamacho.VAT.Editor
                         if (uvVisualActiveTargetIndex == index)
                         {
                             ResetUvVisualTargetCache();
+                            ResetUvVisualTransform(false);
+                            LoadActiveUvVisualTargetTransform();
                             Repaint();
                         }
                     }
@@ -1077,6 +1116,12 @@ namespace JaimeCamacho.VAT.Editor
             {
                 return false;
             }
+
+            entry.wireColor = GetUvVisualWireColorForIndex(uvVisualTargets.Count);
+            entry.hasStoredTransform = false;
+            entry.storedPosition = Vector2.zero;
+            entry.storedScale = Vector2.one;
+            entry.storedRotation = 0f;
 
             uvVisualTargets.Add(entry);
             SetActiveUvVisualTarget(uvVisualTargets.Count - 1);
@@ -1121,6 +1166,7 @@ namespace JaimeCamacho.VAT.Editor
             {
                 uvVisualActiveTargetIndex = -1;
                 ResetUvVisualTargetCache();
+                ResetUvVisualTransform(false);
                 Repaint();
                 return;
             }
@@ -1132,6 +1178,7 @@ namespace JaimeCamacho.VAT.Editor
 
             uvVisualActiveTargetIndex = index;
             ResetUvVisualTargetCache();
+            LoadActiveUvVisualTargetTransform();
             Repaint();
         }
 
@@ -1183,6 +1230,10 @@ namespace JaimeCamacho.VAT.Editor
                 entry.meshFilter = null;
                 entry.skinnedMeshRenderer = null;
                 entry.selectionOverride = null;
+                entry.hasStoredTransform = false;
+                entry.storedPosition = Vector2.zero;
+                entry.storedScale = Vector2.one;
+                entry.storedRotation = 0f;
                 return true;
             }
 
@@ -1236,6 +1287,10 @@ namespace JaimeCamacho.VAT.Editor
             entry.meshFilter = meshFilter;
             entry.skinnedMeshRenderer = skinnedMeshRenderer;
             entry.selectionOverride = selectionObject ?? newTarget;
+            entry.hasStoredTransform = false;
+            entry.storedPosition = Vector2.zero;
+            entry.storedScale = Vector2.one;
+            entry.storedRotation = 0f;
 
             return true;
         }
@@ -1972,7 +2027,7 @@ namespace JaimeCamacho.VAT.Editor
 
             uvVisualOriginalUvs = (Vector2[])restored.Clone();
 
-            ResetUvVisualTransform();
+            ResetUvVisualTransform(false);
             LoadActiveUvVisualTargetTransform();
             Repaint();
 
@@ -2818,6 +2873,50 @@ namespace JaimeCamacho.VAT.Editor
             uvVisualAtlasExportFolderAsset = AssetDatabase.LoadAssetAtPath<DefaultAsset>(uvVisualAtlasExportFolder);
         }
 
+        private static Color GetUvVisualWireColorForIndex(int index)
+        {
+            if (k_UvVisualWireColors == null || k_UvVisualWireColors.Length == 0)
+            {
+                return Color.white;
+            }
+
+            int safeIndex = Mathf.Abs(index) % k_UvVisualWireColors.Length;
+            return k_UvVisualWireColors[safeIndex];
+        }
+
+        private void StoreActiveTargetTransform()
+        {
+            UvVisualTargetEntry entry = GetActiveUvVisualTarget();
+            if (entry == null)
+            {
+                return;
+            }
+
+            entry.storedPosition = uvVisualPosition;
+            entry.storedScale = uvVisualScale;
+            entry.storedRotation = uvVisualRotation;
+            entry.hasStoredTransform = true;
+        }
+
+        private void LoadActiveUvVisualTargetTransform()
+        {
+            UvVisualTargetEntry entry = GetActiveUvVisualTarget();
+
+            if (entry == null || !entry.hasStoredTransform)
+            {
+                uvVisualPosition = Vector2.zero;
+                uvVisualScale = Vector2.one;
+                uvVisualRotation = 0f;
+                uvVisualIsDragging = false;
+                return;
+            }
+
+            uvVisualPosition = entry.storedPosition;
+            uvVisualScale = entry.storedScale;
+            uvVisualRotation = entry.storedRotation;
+            uvVisualIsDragging = false;
+        }
+
         private static string GetPathFromFolderAsset(DefaultAsset folderAsset)
         {
             if (folderAsset == null)
@@ -3281,7 +3380,9 @@ namespace JaimeCamacho.VAT.Editor
                             {
                                 infoList.Add(new VertInfo
                                 {
-                                    position = vertices[i]
+                                    position = vertices[i],
+                                    normal = Vector3.zero,
+                                    tangent = Vector3.zero
                                 });
                             }
                         }
