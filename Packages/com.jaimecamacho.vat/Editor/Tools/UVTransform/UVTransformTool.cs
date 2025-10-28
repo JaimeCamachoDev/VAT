@@ -12,7 +12,19 @@ public class UVTransformTool : ToolBase
     private Vector2 uvScale = Vector2.one;
     private float uvRotation;
 
-    private Vector2[] originalUVs;
+    private class MeshUVData
+    {
+        public Vector2[] OriginalUVs;
+        public Vector2 Position = Vector2.zero;
+        public Vector2 Scale = Vector2.one;
+        public float Rotation = 0f;
+    }
+
+    private readonly Dictionary<MeshFilter, MeshUVData> meshDataCache = new Dictionary<MeshFilter, MeshUVData>();
+
+    private MeshFilter lastMeshFilter;
+    private MeshUVData activeMeshData;
+
     private bool lockUniformScale = true;
 
     private bool isDraggingUV = false;
@@ -23,6 +35,11 @@ public class UVTransformTool : ToolBase
     {
         referenceTexture = (Texture2D)EditorGUILayout.ObjectField("Reference Texture", referenceTexture, typeof(Texture2D), false);
         targetMeshFilter = (MeshFilter)EditorGUILayout.ObjectField("Target Mesh Filter", targetMeshFilter, typeof(MeshFilter), true);
+
+        if (targetMeshFilter != lastMeshFilter)
+        {
+            LoadMeshDataForCurrentSelection();
+        }
 
         EditorGUILayout.Space();
         GUILayout.Label("UV Transform", EditorStyles.boldLabel);
@@ -69,6 +86,7 @@ public class UVTransformTool : ToolBase
         {
             UndoUV();
         }
+        StoreActiveMeshTransformState();
     }
 
     private void DrawUVPreview(Rect rect)
@@ -80,10 +98,13 @@ public class UVTransformTool : ToolBase
         Vector2[] uvs = mesh.uv;
         int[] triangles = mesh.triangles;
 
-        if (originalUVs == null || originalUVs.Length != uvs.Length)
+        if (activeMeshData == null || activeMeshData.OriginalUVs == null || activeMeshData.OriginalUVs.Length != uvs.Length)
         {
-            originalUVs = (Vector2[])uvs.Clone();
+            InitializeMeshData(targetMeshFilter);
         }
+
+        if (activeMeshData == null || activeMeshData.OriginalUVs == null)
+            return;
 
         // Preparamos transformación de visualización
         Matrix4x4 previewMatrix = Matrix4x4.TRS(uvPosition, Quaternion.Euler(0, 0, uvRotation), uvScale);
@@ -93,9 +114,9 @@ public class UVTransformTool : ToolBase
 
         for (int i = 0; i < triangles.Length; i += 3)
         {
-            Vector2 uv0 = (Vector2)previewMatrix.MultiplyPoint(originalUVs[triangles[i]]);
-            Vector2 uv1 = (Vector2)previewMatrix.MultiplyPoint(originalUVs[triangles[i + 1]]);
-            Vector2 uv2 = (Vector2)previewMatrix.MultiplyPoint(originalUVs[triangles[i + 2]]);
+            Vector2 uv0 = (Vector2)previewMatrix.MultiplyPoint(activeMeshData.OriginalUVs[triangles[i]]);
+            Vector2 uv1 = (Vector2)previewMatrix.MultiplyPoint(activeMeshData.OriginalUVs[triangles[i + 1]]);
+            Vector2 uv2 = (Vector2)previewMatrix.MultiplyPoint(activeMeshData.OriginalUVs[triangles[i + 2]]);
 
             uv0 = UVToScreen(uv0, rect);
             uv1 = UVToScreen(uv1, rect);
@@ -162,11 +183,11 @@ public class UVTransformTool : ToolBase
 
     private bool IsMouseNearAnyTransformedUV(Vector2 mouseUV)
     {
-        if (originalUVs == null) return false;
+        if (activeMeshData == null || activeMeshData.OriginalUVs == null) return false;
 
         Matrix4x4 previewMatrix = Matrix4x4.TRS(uvPosition, Quaternion.Euler(0, 0, uvRotation), uvScale);
 
-        foreach (var uv in originalUVs)
+        foreach (var uv in activeMeshData.OriginalUVs)
         {
             Vector2 transformed = (Vector2)previewMatrix.MultiplyPoint(uv);
             if (Vector2.Distance(transformed, mouseUV) < 0.05f) // umbral de cercanía
@@ -201,8 +222,11 @@ public class UVTransformTool : ToolBase
         if (targetMeshFilter == null || targetMeshFilter.sharedMesh == null)
             return;
 
-        var mesh = targetMeshFilter.sharedMesh;
-        var uvs = (Vector2[])originalUVs.Clone();
+        if (activeMeshData == null || activeMeshData.OriginalUVs == null)
+            return;
+
+        var mesh = targetMeshFilter.mesh; // fuerza una instancia única por malla
+        var uvs = (Vector2[])activeMeshData.OriginalUVs.Clone();
 
         Matrix4x4 mat = Matrix4x4.TRS(uvPosition, Quaternion.Euler(0, 0, uvRotation), uvScale);
 
@@ -216,17 +240,24 @@ public class UVTransformTool : ToolBase
         mesh.uv = uvs;
         EditorUtility.SetDirty(mesh);
         Debug.Log("UV transform applied.");
+
+        StoreActiveMeshTransformState();
     }
 
     private void UndoUV()
     {
-        if (targetMeshFilter == null || originalUVs == null)
+        if (targetMeshFilter == null || activeMeshData == null || activeMeshData.OriginalUVs == null)
             return;
 
-        var mesh = targetMeshFilter.sharedMesh;
-        mesh.uv = (Vector2[])originalUVs.Clone();
+        var mesh = targetMeshFilter.mesh;
+        mesh.uv = (Vector2[])activeMeshData.OriginalUVs.Clone();
         EditorUtility.SetDirty(mesh);
         Debug.Log("UVs restored to original.");
+
+        uvPosition = Vector2.zero;
+        uvScale = Vector2.one;
+        uvRotation = 0f;
+        StoreActiveMeshTransformState();
     }
 
     private Bounds GetUVBounds(Vector2[] uvs)
@@ -256,6 +287,56 @@ public class UVTransformTool : ToolBase
         (Vector2)corners[2],
         (Vector2)corners[3]
     };
+    }
+
+    private void LoadMeshDataForCurrentSelection()
+    {
+        lastMeshFilter = targetMeshFilter;
+
+        if (targetMeshFilter == null || targetMeshFilter.sharedMesh == null)
+        {
+            activeMeshData = null;
+            return;
+        }
+
+        if (!meshDataCache.TryGetValue(targetMeshFilter, out activeMeshData))
+        {
+            InitializeMeshData(targetMeshFilter);
+        }
+
+        if (activeMeshData != null)
+        {
+            uvPosition = activeMeshData.Position;
+            uvScale = activeMeshData.Scale;
+            uvRotation = activeMeshData.Rotation;
+        }
+    }
+
+    private void InitializeMeshData(MeshFilter meshFilter)
+    {
+        if (meshFilter == null || meshFilter.sharedMesh == null)
+        {
+            activeMeshData = null;
+            return;
+        }
+
+        var mesh = meshFilter.sharedMesh;
+        activeMeshData = new MeshUVData
+        {
+            OriginalUVs = (Vector2[])mesh.uv.Clone()
+        };
+
+        meshDataCache[meshFilter] = activeMeshData;
+    }
+
+    private void StoreActiveMeshTransformState()
+    {
+        if (activeMeshData == null)
+            return;
+
+        activeMeshData.Position = uvPosition;
+        activeMeshData.Scale = uvScale;
+        activeMeshData.Rotation = uvRotation;
     }
 
 }
