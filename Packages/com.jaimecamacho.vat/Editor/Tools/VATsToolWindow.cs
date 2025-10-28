@@ -54,6 +54,7 @@ namespace JaimeCamacho.VAT.Editor
         private int uvVisualAtlasCellResolution = 256;
         private string uvVisualAtlasExportFolder = "Assets/VATAtlases";
         private string uvVisualAtlasExportFileName = "VAT_UV_ReferenceAtlas";
+        private DefaultAsset uvVisualAtlasExportFolderAsset;
         private readonly List<Texture2D> uvVisualAtlasSourceTextures = new List<Texture2D>();
         private readonly List<UvVisualTargetEntry> uvVisualTargets = new List<UvVisualTargetEntry>();
         private int uvVisualActiveTargetIndex = -1;
@@ -918,6 +919,26 @@ namespace JaimeCamacho.VAT.Editor
                 HandleDragAndDrop(exportFolderRect, ref uvVisualAtlasExportFolder);
                 EditorGUI.indentLevel = previousIndentLevel;
 
+                DefaultAsset newExportFolderAsset = (DefaultAsset)EditorGUILayout.ObjectField("Carpeta de exportación (asset)", uvVisualAtlasExportFolderAsset, typeof(DefaultAsset), false);
+                if (newExportFolderAsset != uvVisualAtlasExportFolderAsset)
+                {
+                    string assetFolderPath = GetPathFromFolderAsset(newExportFolderAsset);
+                    if (!string.IsNullOrEmpty(assetFolderPath))
+                    {
+                        uvVisualAtlasExportFolder = assetFolderPath;
+                        OnUvVisualExportFolderChanged();
+                    }
+                    else
+                    {
+                        if (newExportFolderAsset != null)
+                        {
+                            ReportStatus("Selecciona una carpeta válida dentro de Assets.", MessageType.Warning, false);
+                        }
+
+                        uvVisualAtlasExportFolderAsset = null;
+                    }
+                }
+
                 if (!string.Equals(previousExportFolder, uvVisualAtlasExportFolder, StringComparison.Ordinal))
                 {
                     OnUvVisualExportFolderChanged();
@@ -928,6 +949,25 @@ namespace JaimeCamacho.VAT.Editor
                 if (!IsUvVisualAtlasExportPathValid())
                 {
                     DrawMessageCard("Ruta no válida", "La carpeta debe estar dentro de Assets para exportar el atlas.", MessageType.Warning);
+                }
+
+                if (GUILayout.Button("Seleccionar carpeta de exportación"))
+                {
+                    string selectedFolder = EditorUtility.OpenFolderPanel("Seleccionar carpeta de exportación", Application.dataPath, string.Empty);
+                    if (!string.IsNullOrEmpty(selectedFolder))
+                    {
+                        string projectRelativePath = ConvertToProjectRelativePath(selectedFolder);
+                        if (!string.IsNullOrEmpty(projectRelativePath))
+                        {
+                            uvVisualAtlasExportFolder = projectRelativePath;
+                            OnUvVisualExportFolderChanged();
+                            Repaint();
+                        }
+                        else
+                        {
+                            ReportStatus("La carpeta seleccionada debe estar dentro de la carpeta Assets del proyecto.", MessageType.Error);
+                        }
+                    }
                 }
 
                 using (new EditorGUILayout.HorizontalScope())
@@ -2835,7 +2875,51 @@ namespace JaimeCamacho.VAT.Editor
             return k_UvVisualWireColors[safeIndex];
         }
 
+        private static Color GetUvVisualWireColorForIndex(int index)
+        {
+            if (k_UvVisualWireColors == null || k_UvVisualWireColors.Length == 0)
+            {
+                return Color.white;
+            }
+
+            int safeIndex = Mathf.Abs(index) % k_UvVisualWireColors.Length;
+            return k_UvVisualWireColors[safeIndex];
+        }
+
         private void StoreActiveTargetTransform()
+        {
+            UvVisualTargetEntry entry = GetActiveUvVisualTarget();
+            if (entry == null)
+            {
+                return;
+            }
+
+            entry.storedPosition = uvVisualPosition;
+            entry.storedScale = uvVisualScale;
+            entry.storedRotation = uvVisualRotation;
+            entry.hasStoredTransform = true;
+        }
+
+        private void LoadActiveUvVisualTargetTransform()
+        {
+            UvVisualTargetEntry entry = GetActiveUvVisualTarget();
+
+            if (entry == null || !entry.hasStoredTransform)
+            {
+                uvVisualPosition = Vector2.zero;
+                uvVisualScale = Vector2.one;
+                uvVisualRotation = 0f;
+                uvVisualIsDragging = false;
+                return;
+            }
+
+            uvVisualPosition = entry.storedPosition;
+            uvVisualScale = entry.storedScale;
+            uvVisualRotation = entry.storedRotation;
+            uvVisualIsDragging = false;
+        }
+
+        private static string GetPathFromFolderAsset(DefaultAsset folderAsset)
         {
             UvVisualTargetEntry entry = GetActiveUvVisualTarget();
             if (entry == null)
