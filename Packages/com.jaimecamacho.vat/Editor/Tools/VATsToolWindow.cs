@@ -53,6 +53,7 @@ namespace JaimeCamacho.VAT.Editor
         private int uvVisualAtlasImageCount = 1;
         private int uvVisualAtlasCellResolution = 256;
         private string uvVisualAtlasExportFolder = "Assets/VATAtlases";
+        private string uvVisualAtlasExportFileName = "VAT_UV_ReferenceAtlas";
         private readonly List<Texture2D> uvVisualAtlasSourceTextures = new List<Texture2D>();
         private readonly List<UvVisualTargetEntry> uvVisualTargets = new List<UvVisualTargetEntry>();
         private int uvVisualActiveTargetIndex = -1;
@@ -907,6 +908,8 @@ namespace JaimeCamacho.VAT.Editor
                 HandleDragAndDrop(exportFolderRect, ref uvVisualAtlasExportFolder);
                 EditorGUI.indentLevel = previousIndentLevel;
 
+                uvVisualAtlasExportFileName = EditorGUILayout.TextField("Nombre de archivo (PNG)", uvVisualAtlasExportFileName);
+
                 if (!IsUvVisualAtlasExportPathValid())
                 {
                     DrawMessageCard("Ruta no válida", "La carpeta debe estar dentro de Assets para exportar el atlas.", MessageType.Warning);
@@ -1356,10 +1359,21 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
-            string defaultName = string.IsNullOrEmpty(uvVisualGeneratedAtlas.name) ? "VAT_UV_ReferenceAtlas" : uvVisualGeneratedAtlas.name;
-            string path = EditorUtility.SaveFilePanelInProject("Exportar atlas de referencia", $"{defaultName}.png", "png", "Selecciona la ubicación dentro de la carpeta Assets para guardar el atlas generado.");
+            if (!IsUvVisualAtlasExportPathValid())
+            {
+                ReportStatus("Selecciona una carpeta de exportación válida dentro de Assets antes de exportar el atlas.", MessageType.Error);
+                return;
+            }
 
-            if (string.IsNullOrEmpty(path))
+            string defaultName = string.IsNullOrEmpty(uvVisualGeneratedAtlas.name) ? "VAT_UV_ReferenceAtlas" : uvVisualGeneratedAtlas.name;
+
+            if (!TryBuildUvVisualAtlasExportPath(defaultName, out string exportFolder, out string projectRelativePath))
+            {
+                ReportStatus("No se pudo resolver la ruta de exportación del atlas.", MessageType.Error);
+                return;
+            }
+
+            if (!EnsureDirectoryExists(exportFolder))
             {
                 return;
             }
@@ -1371,9 +1385,18 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
+            string projectRoot = Path.GetDirectoryName(Application.dataPath);
+            if (string.IsNullOrEmpty(projectRoot))
+            {
+                ReportStatus("No se pudo determinar la ruta raíz del proyecto.", MessageType.Error);
+                return;
+            }
+
+            string absolutePath = Path.Combine(projectRoot, projectRelativePath);
+
             try
             {
-                File.WriteAllBytes(path, pngData);
+                File.WriteAllBytes(absolutePath, pngData);
             }
             catch (Exception e)
             {
@@ -1381,9 +1404,9 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
-            AssetDatabase.ImportAsset(path);
+            AssetDatabase.ImportAsset(projectRelativePath);
 
-            if (AssetImporter.GetAtPath(path) is TextureImporter importer)
+            if (AssetImporter.GetAtPath(projectRelativePath) is TextureImporter importer)
             {
                 importer.wrapMode = TextureWrapMode.Clamp;
                 importer.filterMode = FilterMode.Bilinear;
@@ -1391,14 +1414,144 @@ namespace JaimeCamacho.VAT.Editor
                 importer.SaveAndReimport();
             }
 
-            Texture2D exportedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            Texture2D exportedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(projectRelativePath);
             if (exportedTexture != null)
             {
                 uvVisualReferenceTexture = exportedTexture;
             }
 
             Repaint();
-            ReportStatus($"Atlas exportado correctamente a \"{path}\".", MessageType.Info);
+            ReportStatus($"Atlas exportado correctamente a \"{projectRelativePath}\".", MessageType.Info);
+        }
+
+        private bool TryBuildUvVisualAtlasExportPath(string defaultName, out string exportFolder, out string projectRelativePath)
+        {
+            exportFolder = string.Empty;
+            projectRelativePath = string.Empty;
+
+            string normalizedFolder = NormalizeProjectRelativePath(uvVisualAtlasExportFolder);
+            if (string.IsNullOrEmpty(normalizedFolder))
+            {
+                return false;
+            }
+
+            if (!normalizedFolder.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string sanitizedFileName = SanitizeAtlasFileName(uvVisualAtlasExportFileName, defaultName, out string sanitizedBaseName);
+            if (string.IsNullOrEmpty(sanitizedFileName))
+            {
+                sanitizedFileName = defaultName + ".png";
+                sanitizedBaseName = defaultName;
+            }
+
+            exportFolder = normalizedFolder;
+            projectRelativePath = CombineProjectRelativePath(normalizedFolder, sanitizedFileName);
+
+            bool needsRepaint = false;
+
+            if (!string.Equals(uvVisualAtlasExportFolder, normalizedFolder, StringComparison.Ordinal))
+            {
+                uvVisualAtlasExportFolder = normalizedFolder;
+                needsRepaint = true;
+            }
+
+            if (!string.Equals(uvVisualAtlasExportFileName, sanitizedBaseName, StringComparison.Ordinal))
+            {
+                uvVisualAtlasExportFileName = sanitizedBaseName;
+                needsRepaint = true;
+            }
+
+            if (needsRepaint)
+            {
+                Repaint();
+            }
+
+            return true;
+        }
+
+        private static string CombineProjectRelativePath(string folder, string fileName)
+        {
+            if (string.IsNullOrEmpty(folder))
+            {
+                return fileName ?? string.Empty;
+            }
+
+            folder = folder.Replace('\\', '/').TrimEnd('/');
+
+            if (string.IsNullOrEmpty(fileName))
+            {
+                return folder;
+            }
+
+            return $"{folder}/{fileName}";
+        }
+
+        private static string SanitizeAtlasFileName(string candidate, string defaultName, out string sanitizedBaseName)
+        {
+            sanitizedBaseName = string.Empty;
+
+            string workingName = string.IsNullOrWhiteSpace(candidate) ? defaultName : candidate.Trim();
+            if (string.IsNullOrEmpty(workingName))
+            {
+                workingName = defaultName;
+            }
+
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            StringBuilder builder = new StringBuilder(workingName.Length);
+            foreach (char character in workingName)
+            {
+                builder.Append(Array.IndexOf(invalidChars, character) >= 0 ? '_' : character);
+            }
+
+            string sanitized = builder.ToString();
+            if (string.IsNullOrEmpty(sanitized))
+            {
+                sanitized = defaultName;
+            }
+
+            string extension = Path.GetExtension(sanitized);
+            if (string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase))
+            {
+                sanitizedBaseName = Path.GetFileNameWithoutExtension(sanitized);
+                return sanitized;
+            }
+
+            if (!string.IsNullOrEmpty(extension))
+            {
+                sanitized = sanitized.Substring(0, sanitized.Length - extension.Length);
+            }
+
+            if (string.IsNullOrEmpty(sanitized))
+            {
+                sanitized = defaultName;
+            }
+
+            sanitizedBaseName = sanitized;
+            return sanitized + ".png";
+        }
+
+        private bool IsUvVisualAtlasExportPathValid()
+        {
+            if (string.IsNullOrEmpty(uvVisualAtlasExportFolder))
+            {
+                return false;
+            }
+
+            string normalizedFolder = NormalizeProjectRelativePath(uvVisualAtlasExportFolder);
+            if (string.IsNullOrEmpty(normalizedFolder))
+            {
+                return false;
+            }
+
+            if (!normalizedFolder.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return IsProjectRelativeFolder(normalizedFolder);
         }
 
         private static void CopyTextureToAtlas(Texture2D source, Texture2D atlas, int offsetX, int offsetY, int targetResolution)
