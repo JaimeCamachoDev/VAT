@@ -925,6 +925,7 @@ namespace JaimeCamacho.VAT.Editor
                     string assetFolderPath = GetPathFromFolderAsset(newExportFolderAsset);
                     if (!string.IsNullOrEmpty(assetFolderPath))
                     {
+                        uvVisualAtlasExportFolderAsset = newExportFolderAsset;
                         uvVisualAtlasExportFolder = assetFolderPath;
                         OnUvVisualExportFolderChanged();
                     }
@@ -2875,17 +2876,6 @@ namespace JaimeCamacho.VAT.Editor
             return k_UvVisualWireColors[safeIndex];
         }
 
-        private static Color GetUvVisualWireColorForIndex(int index)
-        {
-            if (k_UvVisualWireColors == null || k_UvVisualWireColors.Length == 0)
-            {
-                return Color.white;
-            }
-
-            int safeIndex = Mathf.Abs(index) % k_UvVisualWireColors.Length;
-            return k_UvVisualWireColors[safeIndex];
-        }
-
         private void StoreActiveTargetTransform()
         {
             UvVisualTargetEntry entry = GetActiveUvVisualTarget();
@@ -2921,35 +2911,36 @@ namespace JaimeCamacho.VAT.Editor
 
         private static string GetPathFromFolderAsset(DefaultAsset folderAsset)
         {
-            UvVisualTargetEntry entry = GetActiveUvVisualTarget();
-            if (entry == null)
+            if (folderAsset == null)
             {
-                return;
+                return string.Empty;
             }
 
-            entry.storedPosition = uvVisualPosition;
-            entry.storedScale = uvVisualScale;
-            entry.storedRotation = uvVisualRotation;
-            entry.hasStoredTransform = true;
-        }
-
-        private void LoadActiveUvVisualTargetTransform()
-        {
-            UvVisualTargetEntry entry = GetActiveUvVisualTarget();
-
-            if (entry == null || !entry.hasStoredTransform)
+            string assetPath = AssetDatabase.GetAssetPath(folderAsset);
+            if (string.IsNullOrEmpty(assetPath))
             {
-                uvVisualPosition = Vector2.zero;
-                uvVisualScale = Vector2.one;
-                uvVisualRotation = 0f;
-                uvVisualIsDragging = false;
-                return;
+                return string.Empty;
             }
 
-            uvVisualPosition = entry.storedPosition;
-            uvVisualScale = entry.storedScale;
-            uvVisualRotation = entry.storedRotation;
-            uvVisualIsDragging = false;
+            assetPath = assetPath.Replace('\\', '/');
+            if (AssetDatabase.IsValidFolder(assetPath))
+            {
+                return assetPath;
+            }
+
+            string directory = Path.GetDirectoryName(assetPath);
+            if (string.IsNullOrEmpty(directory))
+            {
+                return string.Empty;
+            }
+
+            directory = directory.Replace('\\', '/');
+            if (!AssetDatabase.IsValidFolder(directory))
+            {
+                return string.Empty;
+            }
+
+            return directory;
         }
 
         private bool TryAssignOutputPathFromPaths(IEnumerable<string> paths, ref string targetPath)
