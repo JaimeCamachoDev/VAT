@@ -54,7 +54,6 @@ namespace JaimeCamacho.VAT.Editor
         private int uvVisualAtlasCellResolution = 256;
         private string uvVisualAtlasExportFolder = "Assets/VATAtlases";
         private string uvVisualAtlasExportFileName = "VAT_UV_ReferenceAtlas";
-        private DefaultAsset uvVisualAtlasExportFolderAsset;
         private readonly List<Texture2D> uvVisualAtlasSourceTextures = new List<Texture2D>();
         private readonly List<UvVisualTargetEntry> uvVisualTargets = new List<UvVisualTargetEntry>();
         private int uvVisualActiveTargetIndex = -1;
@@ -919,27 +918,6 @@ namespace JaimeCamacho.VAT.Editor
                 HandleDragAndDrop(exportFolderRect, ref uvVisualAtlasExportFolder);
                 EditorGUI.indentLevel = previousIndentLevel;
 
-                DefaultAsset newExportFolderAsset = (DefaultAsset)EditorGUILayout.ObjectField("Carpeta de exportación (asset)", uvVisualAtlasExportFolderAsset, typeof(DefaultAsset), false);
-                if (newExportFolderAsset != uvVisualAtlasExportFolderAsset)
-                {
-                    string assetFolderPath = GetPathFromFolderAsset(newExportFolderAsset);
-                    if (!string.IsNullOrEmpty(assetFolderPath))
-                    {
-                        uvVisualAtlasExportFolderAsset = newExportFolderAsset;
-                        uvVisualAtlasExportFolder = assetFolderPath;
-                        OnUvVisualExportFolderChanged();
-                    }
-                    else
-                    {
-                        if (newExportFolderAsset != null)
-                        {
-                            ReportStatus("Selecciona una carpeta válida dentro de Assets.", MessageType.Warning, false);
-                        }
-
-                        uvVisualAtlasExportFolderAsset = null;
-                    }
-                }
-
                 if (!string.Equals(previousExportFolder, uvVisualAtlasExportFolder, StringComparison.Ordinal))
                 {
                     OnUvVisualExportFolderChanged();
@@ -950,25 +928,6 @@ namespace JaimeCamacho.VAT.Editor
                 if (!IsUvVisualAtlasExportPathValid())
                 {
                     DrawMessageCard("Ruta no válida", "La carpeta debe estar dentro de Assets para exportar el atlas.", MessageType.Warning);
-                }
-
-                if (GUILayout.Button("Seleccionar carpeta de exportación"))
-                {
-                    string selectedFolder = EditorUtility.OpenFolderPanel("Seleccionar carpeta de exportación", Application.dataPath, string.Empty);
-                    if (!string.IsNullOrEmpty(selectedFolder))
-                    {
-                        string projectRelativePath = ConvertToProjectRelativePath(selectedFolder);
-                        if (!string.IsNullOrEmpty(projectRelativePath))
-                        {
-                            uvVisualAtlasExportFolder = projectRelativePath;
-                            OnUvVisualExportFolderChanged();
-                            Repaint();
-                        }
-                        else
-                        {
-                            ReportStatus("La carpeta seleccionada debe estar dentro de la carpeta Assets del proyecto.", MessageType.Error);
-                        }
-                    }
                 }
 
                 using (new EditorGUILayout.HorizontalScope())
@@ -2907,40 +2866,6 @@ namespace JaimeCamacho.VAT.Editor
             uvVisualScale = entry.storedScale;
             uvVisualRotation = entry.storedRotation;
             uvVisualIsDragging = false;
-        }
-
-        private static string GetPathFromFolderAsset(DefaultAsset folderAsset)
-        {
-            if (folderAsset == null)
-            {
-                return string.Empty;
-            }
-
-            string assetPath = AssetDatabase.GetAssetPath(folderAsset);
-            if (string.IsNullOrEmpty(assetPath))
-            {
-                return string.Empty;
-            }
-
-            assetPath = assetPath.Replace('\\', '/');
-            if (AssetDatabase.IsValidFolder(assetPath))
-            {
-                return assetPath;
-            }
-
-            string directory = Path.GetDirectoryName(assetPath);
-            if (string.IsNullOrEmpty(directory))
-            {
-                return string.Empty;
-            }
-
-            directory = directory.Replace('\\', '/');
-            if (!AssetDatabase.IsValidFolder(directory))
-            {
-                return string.Empty;
-            }
-
-            return directory;
         }
 
         private bool TryAssignOutputPathFromPaths(IEnumerable<string> paths, ref string targetPath)
