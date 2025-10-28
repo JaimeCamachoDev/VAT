@@ -1887,6 +1887,15 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
+            UvVisualTargetEntry activeEntry = GetActiveUvVisualTarget();
+            Mesh targetMesh = activeEntry?.SharedMesh ?? previewMesh;
+
+            if (targetMesh == null)
+            {
+                ReportStatus("No se encontró una malla activa válida para aplicar la transformación UV.", MessageType.Warning);
+                return;
+            }
+
             if (uvVisualOriginalUvs == null || uvVisualOriginalUvs.Length == 0)
             {
                 ReportStatus("La malla seleccionada no contiene coordenadas UV transformables.", MessageType.Warning);
@@ -1894,62 +1903,22 @@ namespace JaimeCamacho.VAT.Editor
             }
 
             Matrix4x4 transformMatrix = Matrix4x4.TRS(uvVisualPosition, Quaternion.Euler(0f, 0f, uvVisualRotation), uvVisualScale);
-            var processedMeshes = new HashSet<Mesh>();
-            int affectedCount = 0;
+            Vector2[] sourceUvs = (Vector2[])uvVisualOriginalUvs.Clone();
 
-            foreach (UvVisualTargetEntry entry in uvVisualTargets)
+            Vector2[] transformed = new Vector2[sourceUvs.Length];
+            for (int i = 0; i < sourceUvs.Length; i++)
             {
-                if (entry == null)
-                {
-                    continue;
-                }
-
-                Mesh targetMesh = entry.SharedMesh;
-                if (targetMesh == null || processedMeshes.Contains(targetMesh))
-                {
-                    continue;
-                }
-
-                Vector2[] sourceUvs;
-                if (targetMesh == previewMesh)
-                {
-                    sourceUvs = (Vector2[])uvVisualOriginalUvs.Clone();
-                }
-                else
-                {
-                    Vector2[] meshUvs = targetMesh.uv;
-                    if (meshUvs == null || meshUvs.Length == 0)
-                    {
-                        continue;
-                    }
-
-                    sourceUvs = (Vector2[])meshUvs.Clone();
-                }
-
-                Vector2[] transformed = new Vector2[sourceUvs.Length];
-                for (int i = 0; i < sourceUvs.Length; i++)
-                {
-                    Vector3 result = transformMatrix.MultiplyPoint3x4(new Vector3(sourceUvs[i].x, sourceUvs[i].y, 0f));
-                    transformed[i] = new Vector2(result.x, result.y);
-                }
-
-                Undo.RecordObject(targetMesh, "Aplicar transformación UV");
-                targetMesh.uv = transformed;
-                EditorUtility.SetDirty(targetMesh);
-
-                if (targetMesh == previewMesh)
-                {
-                    uvVisualOriginalUvs = (Vector2[])transformed.Clone();
-                }
-
-                processedMeshes.Add(targetMesh);
-                affectedCount++;
+                Vector3 result = transformMatrix.MultiplyPoint3x4(new Vector3(sourceUvs[i].x, sourceUvs[i].y, 0f));
+                transformed[i] = new Vector2(result.x, result.y);
             }
 
-            if (affectedCount == 0)
+            Undo.RecordObject(targetMesh, "Aplicar transformación UV");
+            targetMesh.uv = transformed;
+            EditorUtility.SetDirty(targetMesh);
+
+            if (targetMesh == previewMesh)
             {
-                ReportStatus("No se encontraron mallas válidas para aplicar la transformación UV.", MessageType.Warning);
-                return;
+                uvVisualOriginalUvs = (Vector2[])transformed.Clone();
             }
 
             uvVisualPosition = Vector2.zero;
@@ -1961,8 +1930,7 @@ namespace JaimeCamacho.VAT.Editor
             uvVisualScale = Vector2.one;
             Repaint();
 
-            string message = affectedCount > 1 ? "Transformación UV aplicada a las mallas seleccionadas." : "Transformación UV aplicada correctamente.";
-            ReportStatus(message, MessageType.Info);
+            ReportStatus("Transformación UV aplicada correctamente a la malla activa.", MessageType.Info);
         }
 
         private void UndoUvVisualChanges(Mesh mesh)
