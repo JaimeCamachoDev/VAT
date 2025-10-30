@@ -165,6 +165,7 @@ namespace JaimeCamacho.VAT.Editor
         private float painterBrushRadius = 2f;
         private int painterBrushDensity = 5;
         private float painterMinDistance = 0.5f;
+        private bool painterRejectedAssetMeshFilter;
 
         [MenuItem("Tools/JaimeCamachoDev/VATsTool")]
         [MenuItem("Assets/JaimeCamachoDev/VATsTool")]
@@ -2054,11 +2055,27 @@ namespace JaimeCamacho.VAT.Editor
             for (int i = 0; i < group.meshFilters.Count; i++)
             {
                 EditorGUILayout.BeginHorizontal();
-                group.meshFilters[i] = (MeshFilter)EditorGUILayout.ObjectField(group.meshFilters[i], typeof(MeshFilter), true);
+                MeshFilter previous = group.meshFilters[i];
+                MeshFilter assigned = (MeshFilter)EditorGUILayout.ObjectField(previous, typeof(MeshFilter), true);
+
+                if (assigned != previous)
+                {
+                    if (assigned == null || !EditorUtility.IsPersistent(assigned))
+                    {
+                        group.meshFilters[i] = assigned;
+                        InvalidatePainterHierarchy(group);
+                    }
+                    else
+                    {
+                        painterRejectedAssetMeshFilter = true;
+                    }
+                }
+
                 if (GUILayout.Button("X", GUILayout.Width(24f)))
                 {
                     group.meshFilters.RemoveAt(i);
                     i--;
+                    InvalidatePainterHierarchy(group);
                 }
                 EditorGUILayout.EndHorizontal();
             }
@@ -2199,6 +2216,12 @@ namespace JaimeCamacho.VAT.Editor
             else if (painterSurfaceCollider == null)
             {
                 DrawMessageCard("MeshCollider requerido", "La superficie seleccionada no incluye un componente MeshCollider.", MessageType.Warning);
+            }
+
+            if (painterRejectedAssetMeshFilter)
+            {
+                DrawMessageCard("Asigna objetos de escena", "Solo se aceptan Mesh Filters pertenecientes a GameObjects de la jerarquía. Arrastra el objeto desde la escena en lugar de un prefab o asset.", MessageType.Warning);
+                painterRejectedAssetMeshFilter = false;
             }
 
             if (!HasAnyValidPaintGroup())
