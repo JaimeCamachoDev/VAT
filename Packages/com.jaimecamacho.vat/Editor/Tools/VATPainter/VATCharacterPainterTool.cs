@@ -58,14 +58,43 @@ public class VATCharacterPainterTool : ToolBase
             EditorGUILayout.LabelField("Mesh Filters:", EditorStyles.boldLabel);
             for (int j = 0; j < group.meshFilters.Count; j++)
             {
+                bool invalidSelection = false;
                 EditorGUILayout.BeginHorizontal();
-                group.meshFilters[j] = (MeshFilter)EditorGUILayout.ObjectField(group.meshFilters[j], typeof(MeshFilter), true);
+
+                var currentValue = group.meshFilters[j] != null ? (UnityEngine.Object)group.meshFilters[j] : null;
+                EditorGUI.BeginChangeCheck();
+                UnityEngine.Object selectedObject = EditorGUILayout.ObjectField(currentValue, typeof(UnityEngine.Object), true);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    if (selectedObject == null)
+                    {
+                        group.meshFilters[j] = null;
+                    }
+                    else
+                    {
+                        MeshFilter resolvedFilter = ResolveMeshFilter(selectedObject);
+                        if (resolvedFilter != null)
+                        {
+                            group.meshFilters[j] = resolvedFilter;
+                        }
+                        else
+                        {
+                            invalidSelection = true;
+                        }
+                    }
+                }
+
                 if (GUILayout.Button("X", GUILayout.Width(20)))
                 {
                     group.meshFilters.RemoveAt(j);
                     j--;
                 }
                 EditorGUILayout.EndHorizontal();
+
+                if (invalidSelection)
+                {
+                    EditorGUILayout.HelpBox("The selected object does not contain a MeshFilter component.", MessageType.Warning);
+                }
             }
             if (GUILayout.Button("Add Mesh Filter"))
             {
@@ -116,6 +145,31 @@ public class VATCharacterPainterTool : ToolBase
             PreparePaintHierarchy();
             SceneView.duringSceneGui += OnSceneGUI;
         }
+    }
+
+    private static MeshFilter ResolveMeshFilter(UnityEngine.Object source)
+    {
+        if (source == null)
+        {
+            return null;
+        }
+
+        if (source is MeshFilter meshFilter)
+        {
+            return meshFilter;
+        }
+
+        if (source is GameObject gameObject)
+        {
+            return gameObject.GetComponent<MeshFilter>();
+        }
+
+        if (source is Component component)
+        {
+            return component.GetComponent<MeshFilter>();
+        }
+
+        return null;
     }
 
     private void PreparePaintHierarchy()
