@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
+using System.IO;
 
 [CreateAssetMenu(menuName = "VAT Tools/Character Painter Tool")]
 public class VATCharacterPainterTool : ToolBase
@@ -15,6 +16,8 @@ public class VATCharacterPainterTool : ToolBase
 
     public List<PaintGroup> paintGroups = new();
 
+    private const string ConvertedAssetsFolder = "Assets/VATConvertedMeshes";
+
     public Transform focusTarget;
     public GameObject paintSurface;
     private MeshCollider paintCollider;
@@ -22,6 +25,8 @@ public class VATCharacterPainterTool : ToolBase
     private bool paintingMode = false;
     private GameObject parentPaintRoot;
     private Dictionary<string, List<Transform>> groupMaterialParents = new();
+
+    private static readonly Dictionary<string, MeshFilter> convertedMeshFilters = new();
 
     public float brushRadius = 2f;
     public int brushDensity = 5;
@@ -159,17 +164,180 @@ public class VATCharacterPainterTool : ToolBase
             return meshFilter;
         }
 
+        if (source is SkinnedMeshRenderer skinnedMeshRenderer)
+        {
+            return ConvertSkinnedMeshRenderer(skinnedMeshRenderer);
+        }
+
+        if (source is Mesh meshAsset)
+        {
+            return ConvertMeshAsset(meshAsset);
+        }
+
         if (source is GameObject gameObject)
         {
-            return gameObject.GetComponent<MeshFilter>();
+            MeshFilter foundFilter = gameObject.GetComponent<MeshFilter>() ?? gameObject.GetComponentInChildren<MeshFilter>();
+            if (foundFilter != null)
+            {
+                return foundFilter;
+            }
+
+            SkinnedMeshRenderer foundSkinned = gameObject.GetComponent<SkinnedMeshRenderer>() ?? gameObject.GetComponentInChildren<SkinnedMeshRenderer>();
+            if (foundSkinned != null)
+            {
+                return ConvertSkinnedMeshRenderer(foundSkinned);
+            }
         }
 
         if (source is Component component)
         {
-            return component.GetComponent<MeshFilter>();
+            MeshFilter foundFilter = component.GetComponent<MeshFilter>() ?? component.GetComponentInChildren<MeshFilter>();
+            if (foundFilter != null)
+            {
+                return foundFilter;
+            }
+
+            SkinnedMeshRenderer foundSkinned = component.GetComponent<SkinnedMeshRenderer>() ?? component.GetComponentInChildren<SkinnedMeshRenderer>();
+            if (foundSkinned != null)
+            {
+                return ConvertSkinnedMeshRenderer(foundSkinned);
+            }
         }
 
         return null;
+    }
+
+    private static MeshFilter ConvertMeshAsset(Mesh mesh)
+    {
+        if (mesh == null)
+        {
+            return null;
+        }
+
+        string key = BuildSourceKey(mesh);
+        if (convertedMeshFilters.TryGetValue(key, out MeshFilter cachedMeshFilter) && cachedMeshFilter != null)
+        {
+            return cachedMeshFilter;
+        }
+
+        EnsureConvertedFolder();
+
+        string baseName = !string.IsNullOrEmpty(mesh.name) ? mesh.name : "ConvertedMesh";
+        string sanitizedName = SanitizeFileName(baseName);
+
+        string prefabPath = AssetDatabase.GenerateUniqueAssetPath($"{ConvertedAssetsFolder}/{sanitizedName}_FromMesh.prefab");
+
+        GameObject temp = new GameObject($"{baseName}_SourceMesh");
+        MeshFilter tempFilter = temp.AddComponent<MeshFilter>();
+        tempFilter.sharedMesh = mesh;
+
+        MeshRenderer tempRenderer = temp.AddComponent<MeshRenderer>();
+        Material defaultMaterial = AssetDatabase.GetBuiltinExtraResource<Material>("Default-Material.mat");
+        if (defaultMaterial != null)
+        {
+            tempRenderer.sharedMaterial = defaultMaterial;
+        }
+
+        GameObject prefab = PrefabUtility.SaveAsPrefabAsset(temp, prefabPath);
+        Object.DestroyImmediate(temp);
+
+        MeshFilter prefabMeshFilter = prefab != null ? prefab.GetComponent<MeshFilter>() : null;
+        if (prefabMeshFilter != null)
+        {
+            convertedMeshFilters[key] = prefabMeshFilter;
+        }
+
+        AssetDatabase.SaveAssets();
+
+        return prefabMeshFilter;
+    }
+
+    private static MeshFilter ConvertSkinnedMeshRenderer(SkinnedMeshRenderer skinnedMeshRenderer)
+    {
+        if (skinnedMeshRenderer == null || skinnedMeshRenderer.sharedMesh == null)
+        {
+            return null;
+        }
+
+        UnityEngine.Object keySource = skinnedMeshRenderer.sharedMesh != null ? skinnedMeshRenderer.sharedMesh : skinnedMeshRenderer;
+        string key = BuildSourceKey(keySource);
+        if (convertedMeshFilters.TryGetValue(key, out MeshFilter cachedMeshFilter) && cachedMeshFilter != null)
+        {
+            return cachedMeshFilter;
+        }
+
+        EnsureConvertedFolder();
+
+        Mesh bakedMesh = Object.Instantiate(skinnedMeshRenderer.sharedMesh);
+        string meshName = !string.IsNullOrEmpty(skinnedMeshRenderer.sharedMesh.name) ? skinnedMeshRenderer.sharedMesh.name : skinnedMeshRenderer.name;
+        if (string.IsNullOrEmpty(meshName))
+        {
+            meshName = "ConvertedSkinnedMesh";
+        }
+        bakedMesh.name = meshName + "_Converted";
+
+        string sanitizedName = SanitizeFileName(meshName);
+        string meshAssetPath = AssetDatabase.GenerateUniqueAssetPath($"{ConvertedAssetsFolder}/{sanitizedName}_Mesh.asset");
+        AssetDatabase.CreateAsset(bakedMesh, meshAssetPath);
+
+        GameObject temp = new GameObject($"{meshName}_Converted");
+        MeshFilter tempFilter = temp.AddComponent<MeshFilter>();
+        tempFilter.sharedMesh = bakedMesh;
+
+        MeshRenderer tempRenderer = temp.AddComponent<MeshRenderer>();
+        tempRenderer.sharedMaterials = skinnedMeshRenderer.sharedMaterials;
+
+        string prefabPath = AssetDatabase.GenerateUniqueAssetPath($"{ConvertedAssetsFolder}/{sanitizedName}_Prefab.prefab");
+        GameObject prefab = PrefabUtility.SaveAsPrefabAsset(temp, prefabPath);
+        Object.DestroyImmediate(temp);
+
+        MeshFilter prefabMeshFilter = prefab != null ? prefab.GetComponent<MeshFilter>() : null;
+        if (prefabMeshFilter != null)
+        {
+            convertedMeshFilters[key] = prefabMeshFilter;
+        }
+
+        AssetDatabase.SaveAssets();
+
+        return prefabMeshFilter;
+    }
+
+    private static void EnsureConvertedFolder()
+    {
+        if (!AssetDatabase.IsValidFolder(ConvertedAssetsFolder))
+        {
+            AssetDatabase.CreateFolder("Assets", Path.GetFileName(ConvertedAssetsFolder));
+        }
+    }
+
+    private static string BuildSourceKey(UnityEngine.Object source)
+    {
+        if (source == null)
+        {
+            return string.Empty;
+        }
+
+        if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(source, out string guid, out long localId))
+        {
+            return $"{guid}_{localId}";
+        }
+
+        return source.GetInstanceID().ToString();
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return "Converted";
+        }
+
+        foreach (char invalidChar in Path.GetInvalidFileNameChars())
+        {
+            name = name.Replace(invalidChar, '_');
+        }
+
+        return name;
     }
 
     private void PreparePaintHierarchy()
