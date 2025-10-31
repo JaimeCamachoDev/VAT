@@ -2054,9 +2054,19 @@ namespace JaimeCamacho.VAT.Editor
             for (int i = 0; i < group.meshFilters.Count; i++)
             {
                 EditorGUILayout.BeginHorizontal();
-                MeshFilter previous = group.meshFilters[i];
-                MeshFilter assigned = (MeshFilter)EditorGUILayout.ObjectField(previous, typeof(MeshFilter), true);
 
+                MeshFilter previous = group.meshFilters[i];
+
+                // Mostramos el objeto actual (puede ser null o un MeshFilter) como UnityEngine.Object
+                UnityEngine.Object display = previous != null ? (UnityEngine.Object)previous : null;
+
+                // IMPORTANTe: permitimos asignar cualquier UnityEngine.Object, de escena o de Assets
+                UnityEngine.Object picked = EditorGUILayout.ObjectField(display, typeof(UnityEngine.Object), true);
+
+                // Convertimos a MeshFilter con tu helper. Admite Skinned, Mesh assets, GameObjects, etc.
+                MeshFilter assigned = ResolveMeshFilter(picked);
+
+                // Si cambió, actualizamos y marcamos jerarquía
                 if (assigned != previous)
                 {
                     group.meshFilters[i] = assigned;
@@ -2069,6 +2079,7 @@ namespace JaimeCamacho.VAT.Editor
                     i--;
                     InvalidatePainterHierarchy(group);
                 }
+
                 EditorGUILayout.EndHorizontal();
             }
 
@@ -2128,28 +2139,34 @@ namespace JaimeCamacho.VAT.Editor
 
         private void AddSelectedMeshFilters(PaintGroup group)
         {
-            GameObject[] selectedObjects = Selection.gameObjects;
             bool added = false;
 
-            foreach (GameObject go in selectedObjects)
+            // Admite tanto Selection.objects (Assets) como Selection.gameObjects (escena)
+            foreach (var obj in Selection.objects)
             {
-                if (go == null)
-                {
-                    continue;
-                }
+                if (obj == null) continue;
 
-                MeshFilter filter = go.GetComponent<MeshFilter>();
-                if (filter != null && !group.meshFilters.Contains(filter))
+                MeshFilter resolved = ResolveMeshFilter(obj);
+                if (resolved != null && !group.meshFilters.Contains(resolved))
                 {
-                    group.meshFilters.Add(filter);
+                    group.meshFilters.Add(resolved);
                     added = true;
                 }
             }
 
-            if (added)
+            foreach (var go in Selection.gameObjects)
             {
-                Repaint();
+                if (go == null) continue;
+
+                MeshFilter resolved = ResolveMeshFilter(go);
+                if (resolved != null && !group.meshFilters.Contains(resolved))
+                {
+                    group.meshFilters.Add(resolved);
+                    added = true;
+                }
             }
+
+            if (added) Repaint();
         }
 
         private bool AddSelectedMaterials(PaintGroup group)
@@ -3559,5 +3576,144 @@ namespace JaimeCamacho.VAT.Editor
                 return texture;
             }
         }
+
+
+        private const string k_ConvertedAssetsFolder = "Assets/VATConvertedMeshes";
+        private static readonly Dictionary<string, MeshFilter> s_convertedCache = new Dictionary<string, MeshFilter>();
+
+        private MeshFilter ResolveMeshFilter(UnityEngine.Object source)
+        {
+            if (source == null) return null;
+
+            // 1) Ya es un MeshFilter
+            if (source is MeshFilter mf) return mf;
+
+            // 2) Es un SkinnedMeshRenderer -> convertir a prefab con MeshFilter
+            if (source is SkinnedMeshRenderer skinned) return ConvertSkinnedMeshRenderer(skinned);
+
+            // 3) Es un Mesh asset -> envolver en prefab con MeshFilter
+            if (source is Mesh meshAsset) return ConvertMeshAsset(meshAsset);
+
+            // 4) Es un GameObject o Component -> buscar MeshFilter o Skinned y resolver
+            if (source is GameObject go) return ResolveFromGameObject(go);
+            if (source is Component comp) return ResolveFromGameObject(comp.gameObject);
+
+            // 5) Cualquier otro tipo: intentar obtener su ruta/mesh y convertir
+            return null;
+        }
+
+        private MeshFilter ResolveFromGameObject(GameObject go)
+        {
+            if (go == null) return null;
+
+            // Preferimos un MeshFilter directo (escena o prefab)
+            var mf = go.GetComponent<MeshFilter>() ?? go.GetComponentInChildren<MeshFilter>(true);
+            if (mf != null) return mf;
+
+            // Si es skinned en escena o prefab, lo convertimos
+            var skin = go.GetComponent<SkinnedMeshRenderer>() ?? go.GetComponentInChildren<SkinnedMeshRenderer>(true);
+            if (skin != null) return ConvertSkinnedMeshRenderer(skin);
+
+            return null;
+        }
+
+        private MeshFilter ConvertMeshAsset(Mesh mesh)
+        {
+            if (mesh == null) return null;
+
+            string key = BuildSourceKey(mesh);
+            if (s_convertedCache.TryGetValue(key, out var cached) && cached != null) return cached;
+
+            EnsureConvertedFolder();
+
+            string baseName = string.IsNullOrEmpty(mesh.name) ? "ConvertedMesh" : mesh.name;
+            string safeName = SanitizeFileName(baseName);
+
+            // Creamos un prefab con MeshFilter + MeshRenderer apuntando al Mesh asset
+            string prefabPath = AssetDatabase.GenerateUniqueAssetPath($"{k_ConvertedAssetsFolder}/{safeName}_FromMesh.prefab");
+
+            var temp = new GameObject($"{baseName}_SourceMesh");
+            var tempFilter = temp.AddComponent<MeshFilter>();
+            tempFilter.sharedMesh = mesh;
+
+            var tempRenderer = temp.AddComponent<MeshRenderer>();
+            var defaultMat = AssetDatabase.GetBuiltinExtraResource<Material>("Default-Material.mat");
+            if (defaultMat != null) tempRenderer.sharedMaterial = defaultMat;
+
+            var prefab = PrefabUtility.SaveAsPrefabAsset(temp, prefabPath);
+            DestroyImmediate(temp);
+
+            var prefabFilter = prefab != null ? prefab.GetComponent<MeshFilter>() : null;
+            if (prefabFilter != null) s_convertedCache[key] = prefabFilter;
+
+            AssetDatabase.SaveAssets();
+            return prefabFilter;
+        }
+
+        private MeshFilter ConvertSkinnedMeshRenderer(SkinnedMeshRenderer skin)
+        {
+            if (skin == null || skin.sharedMesh == null) return null;
+
+            // Cache por GUID del mesh si existe
+            UnityEngine.Object keyObj = skin.sharedMesh ? (UnityEngine.Object)skin.sharedMesh : skin;
+            string key = BuildSourceKey(keyObj);
+            if (s_convertedCache.TryGetValue(key, out var cached) && cached != null) return cached;
+
+            EnsureConvertedFolder();
+
+            // Duplicamos la malla esquelética como malla estática (no hace bake por-frame)
+            var baked = UnityEngine.Object.Instantiate(skin.sharedMesh);
+            string meshName = string.IsNullOrEmpty(skin.sharedMesh.name) ? skin.name : skin.sharedMesh.name;
+            if (string.IsNullOrEmpty(meshName)) meshName = "ConvertedSkinnedMesh";
+            baked.name = meshName + "_Converted";
+
+            string safe = SanitizeFileName(meshName);
+            string meshAssetPath = AssetDatabase.GenerateUniqueAssetPath($"{k_ConvertedAssetsFolder}/{safe}_Mesh.asset");
+            AssetDatabase.CreateAsset(baked, meshAssetPath);
+
+            var temp = new GameObject($"{meshName}_Converted");
+            var tempFilter = temp.AddComponent<MeshFilter>();
+            tempFilter.sharedMesh = baked;
+
+            var tempRenderer = temp.AddComponent<MeshRenderer>();
+            tempRenderer.sharedMaterials = skin.sharedMaterials;
+
+            string prefabPath = AssetDatabase.GenerateUniqueAssetPath($"{k_ConvertedAssetsFolder}/{safe}_Prefab.prefab");
+            var prefab = PrefabUtility.SaveAsPrefabAsset(temp, prefabPath);
+            DestroyImmediate(temp);
+
+            var prefabFilter = prefab != null ? prefab.GetComponent<MeshFilter>() : null;
+            if (prefabFilter != null) s_convertedCache[key] = prefabFilter;
+
+            AssetDatabase.SaveAssets();
+            return prefabFilter;
+        }
+
+        private static void EnsureConvertedFolder()
+        {
+            if (!AssetDatabase.IsValidFolder(k_ConvertedAssetsFolder))
+            {
+                AssetDatabase.CreateFolder("Assets", System.IO.Path.GetFileName(k_ConvertedAssetsFolder));
+            }
+        }
+
+        private static string BuildSourceKey(UnityEngine.Object source)
+        {
+            if (source == null) return string.Empty;
+
+            if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(source, out string guid, out long localId))
+                return $"{guid}_{localId}";
+
+            return source.GetInstanceID().ToString();
+        }
+
+        private static string SanitizeFileName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return "Converted";
+            foreach (char c in System.IO.Path.GetInvalidFileNameChars())
+                name = name.Replace(c, '_');
+            return name;
+        }
+
     }
 }
