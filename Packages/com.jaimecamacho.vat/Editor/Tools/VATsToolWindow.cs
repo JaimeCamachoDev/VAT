@@ -1364,6 +1364,17 @@ namespace JaimeCamacho.VAT.Editor
 
             ReportStatus($"Atlas de referencia generado con {textureCount} imágenes ({atlasWidth}x{atlasHeight} píxeles).", MessageType.Info, false);
             Repaint();
+
+        }
+
+        private void ClearStatus(ToolTab tab)
+        {
+            // Solo limpia si el mensaje pertenece a esa pestaña
+            if (statusMessageTab == tab && !string.IsNullOrEmpty(statusMessage))
+            {
+                statusMessage = string.Empty;
+                Repaint();
+            }
         }
 
         private void ExportUvVisualReferenceAtlas()
@@ -2053,17 +2064,22 @@ namespace JaimeCamacho.VAT.Editor
 
             for (int i = 0; i < group.meshFilters.Count; i++)
             {
+                bool invalidPick = false;
+                string invalidReason = null;
+
                 EditorGUILayout.BeginHorizontal();
 
                 MeshFilter previous = group.meshFilters[i];
                 UnityEngine.Object display = previous != null ? (UnityEngine.Object)previous : null;
 
-                // Permite arrastrar/escoger cualquier cosa, pero luego filtramos
                 UnityEngine.Object picked = EditorGUILayout.ObjectField(display, typeof(UnityEngine.Object), true);
 
-                // <<< filtro duro: si no es Mesh/MF/SMR/GO(con mesh) => lo ignoramos
-                if (!IsAcceptableMeshSource(picked))
+                if (picked != null && !IsAcceptableMeshSource(picked))
+                {
+                    invalidPick = true;
+                    invalidReason = GetMeshSourceInvalidReason(picked);
                     picked = null;
+                }
 
                 MeshFilter assigned = ResolveMeshFilter(picked);
 
@@ -2071,6 +2087,10 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     group.meshFilters[i] = assigned;
                     InvalidatePainterHierarchy(group);
+
+                    // Si se ha asignado algo válido, limpiamos el mensaje de error
+                    if (assigned != null && !invalidPick)
+                        ClearStatus(ToolTab.VatPainter);
                 }
 
                 if (GUILayout.Button("X", GUILayout.Width(24f)))
@@ -2078,28 +2098,32 @@ namespace JaimeCamacho.VAT.Editor
                     group.meshFilters.RemoveAt(i);
                     i--;
                     InvalidatePainterHierarchy(group);
+                    EditorGUILayout.EndHorizontal();
+                    continue;
                 }
 
                 EditorGUILayout.EndHorizontal();
+
+                if (invalidPick)
+                {
+                    ReportStatus($"Selección inválida en Mesh Filters: {invalidReason}", MessageType.Error);
+                    EditorGUILayout.HelpBox(invalidReason, MessageType.Error);
+                }
             }
 
             using (new EditorGUILayout.HorizontalScope())
             {
                 if (GUILayout.Button("Añadir Mesh Filter"))
-                {
                     group.meshFilters.Add(null);
-                }
 
                 if (GUILayout.Button("Añadir selección"))
-                {
                     AddSelectedMeshFilters(group);
-                }
             }
 
             DrawMeshFilterDropArea(group);
-
             EditorGUI.indentLevel--;
         }
+
 
         private void DrawMaterialList(PaintGroup group)
         {
@@ -2142,12 +2166,18 @@ namespace JaimeCamacho.VAT.Editor
         private void AddSelectedMeshFilters(PaintGroup group)
         {
             bool added = false;
+            List<string> invalids = new List<string>();
 
-            // Assets (pueden incluir Mesh assets, prefabs con renderer, etc.)
+            // Assets (Project) seleccionados
             foreach (var obj in Selection.objects)
             {
                 if (obj == null) continue;
-                if (!IsAcceptableMeshSource(obj)) continue;
+
+                if (!IsAcceptableMeshSource(obj))
+                {
+                    invalids.Add(GetMeshSourceInvalidReason(obj));
+                    continue;
+                }
 
                 MeshFilter resolved = ResolveMeshFilter(obj);
                 if (resolved != null && !group.meshFilters.Contains(resolved))
@@ -2161,7 +2191,12 @@ namespace JaimeCamacho.VAT.Editor
             foreach (var go in Selection.gameObjects)
             {
                 if (go == null) continue;
-                if (!IsAcceptableMeshSource(go)) continue;
+
+                if (!IsAcceptableMeshSource(go))
+                {
+                    invalids.Add(GetMeshSourceInvalidReason(go));
+                    continue;
+                }
 
                 MeshFilter resolved = ResolveMeshFilter(go);
                 if (resolved != null && !group.meshFilters.Contains(resolved))
@@ -2172,8 +2207,28 @@ namespace JaimeCamacho.VAT.Editor
             }
 
             if (added) Repaint();
-        }
 
+
+            if (added && invalids.Count == 0)
+                ClearStatus(ToolTab.VatPainter);
+
+            if (invalids.Count > 0)
+            {
+                ReportStatus(
+                    "Algunos elementos seleccionados fueron rechazados en Mesh Filters:\n- " + string.Join("\n- ", invalids),
+                    MessageType.Error
+                );
+            }
+
+
+            if (invalids.Count > 0)
+            {
+                ReportStatus(
+                    "Algunos elementos seleccionados fueron rechazados en Mesh Filters:\n- " + string.Join("\n- ", invalids),
+                    MessageType.Error
+                );
+            }
+        }
         private void DrawMeshFilterDropArea(PaintGroup group)
         {
             Rect dropRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.helpBox, GUILayout.Height(36f));
@@ -2185,48 +2240,36 @@ namespace JaimeCamacho.VAT.Editor
         private void HandleMeshFilterDragAndDrop(PaintGroup group, Rect dropRect)
         {
             Event evt = Event.current;
-            if (evt == null)
-            {
-                return;
-            }
+            if (evt == null) return;
 
-            if (evt.type != EventType.DragUpdated && evt.type != EventType.DragPerform)
-            {
-                return;
-            }
+            if (evt.type != EventType.DragUpdated && evt.type != EventType.DragPerform) return;
+            if (!dropRect.Contains(evt.mousePosition)) return;
 
-            if (!dropRect.Contains(evt.mousePosition))
-            {
-                return;
-            }
-
-            bool hasValidObject = false;
+            // ¿Hay al menos uno válido?
+            bool anyValid = false;
             foreach (UnityEngine.Object dragged in DragAndDrop.objectReferences)
             {
                 if (IsAcceptableMeshSource(dragged))
                 {
-                    hasValidObject = true;
+                    anyValid = true;
                     break;
                 }
             }
 
-            DragAndDrop.visualMode = hasValidObject ? DragAndDropVisualMode.Copy : DragAndDropVisualMode.Rejected;
-
-            if (!hasValidObject)
-            {
-                evt.Use();
-                return;
-            }
+            DragAndDrop.visualMode = anyValid ? DragAndDropVisualMode.Copy : DragAndDropVisualMode.Rejected;
 
             if (evt.type == EventType.DragPerform)
             {
                 DragAndDrop.AcceptDrag();
 
                 bool added = false;
+                List<string> invalids = new List<string>();
+
                 foreach (UnityEngine.Object dragged in DragAndDrop.objectReferences)
                 {
                     if (!IsAcceptableMeshSource(dragged))
                     {
+                        invalids.Add(GetMeshSourceInvalidReason(dragged));
                         continue;
                     }
 
@@ -2242,12 +2285,23 @@ namespace JaimeCamacho.VAT.Editor
                 {
                     InvalidatePainterHierarchy(group);
                     Repaint();
+
+                    // Si todo fue válido, limpiamos el error previo
+                    if (invalids.Count == 0)
+                        ClearStatus(ToolTab.VatPainter);
                 }
+
+                if (invalids.Count > 0)
+                {
+                    ReportStatus(
+                        "Algunos elementos fueron rechazados al arrastrar a Mesh Filters:\n- " + string.Join("\n- ", invalids),
+                        MessageType.Error
+                    );
+                }
+
+                evt.Use();
             }
-
-            evt.Use();
         }
-
         private bool AddSelectedMaterials(PaintGroup group)
         {
             bool added = false;
@@ -3703,7 +3757,28 @@ namespace JaimeCamacho.VAT.Editor
             return false;
         }
 
+        // Motivo legible de por qué un objeto no es una fuente de malla aceptable
+        private static string GetMeshSourceInvalidReason(UnityEngine.Object obj)
+        {
+            if (obj == null) return "El objeto es nulo.";
+            string path = AssetDatabase.GetAssetPath(obj);
 
+            if (!string.IsNullOrEmpty(path))
+            {
+                if (AssetDatabase.IsValidFolder(path))
+                    return $"\"{obj.name}\" es una carpeta. Arrastra una malla o un objeto con MeshFilter/SkinnedMeshRenderer.";
+                if (System.IO.Path.GetExtension(path).Equals(".unity", StringComparison.OrdinalIgnoreCase))
+                    return $"\"{obj.name}\" es una escena (.unity). Arrastra una malla o un objeto con MeshFilter/SkinnedMeshRenderer.";
+            }
+
+            // Tipos comunes que la gente suele arrastrar por error
+            if (obj is Material) return $"\"{obj.name}\" es un Material. Se necesita Mesh/MeshFilter/SkinnedMeshRenderer o GameObject/Prefab con ellos.";
+            if (obj is Texture) return $"\"{obj.name}\" es una Textura. Se necesita Mesh/MeshFilter/SkinnedMeshRenderer o GameObject/Prefab con ellos.";
+            if (obj is AnimationClip) return $"\"{obj.name}\" es un Clip de animación. Se necesita Mesh/MeshFilter/SkinnedMeshRenderer o GameObject/Prefab con ellos.";
+
+            // Cualquier otro tipo
+            return $"\"{obj.name}\" ({obj.GetType().Name}) no contiene MeshFilter ni SkinnedMeshRenderer.";
+        }
 
         private MeshFilter ResolveMeshFilter(UnityEngine.Object source)
         {
