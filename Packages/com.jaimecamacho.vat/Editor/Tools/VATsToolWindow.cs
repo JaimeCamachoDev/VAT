@@ -2056,17 +2056,17 @@ namespace JaimeCamacho.VAT.Editor
                 EditorGUILayout.BeginHorizontal();
 
                 MeshFilter previous = group.meshFilters[i];
-
-                // Mostramos el objeto actual (puede ser null o un MeshFilter) como UnityEngine.Object
                 UnityEngine.Object display = previous != null ? (UnityEngine.Object)previous : null;
 
-                // IMPORTANTe: permitimos asignar cualquier UnityEngine.Object, de escena o de Assets
+                // Permite arrastrar/escoger cualquier cosa, pero luego filtramos
                 UnityEngine.Object picked = EditorGUILayout.ObjectField(display, typeof(UnityEngine.Object), true);
 
-                // Convertimos a MeshFilter con tu helper. Admite Skinned, Mesh assets, GameObjects, etc.
+                // <<< filtro duro: si no es Mesh/MF/SMR/GO(con mesh) => lo ignoramos
+                if (!IsAcceptableMeshSource(picked))
+                    picked = null;
+
                 MeshFilter assigned = ResolveMeshFilter(picked);
 
-                // Si cambió, actualizamos y marcamos jerarquía
                 if (assigned != previous)
                 {
                     group.meshFilters[i] = assigned;
@@ -2141,10 +2141,11 @@ namespace JaimeCamacho.VAT.Editor
         {
             bool added = false;
 
-            // Admite tanto Selection.objects (Assets) como Selection.gameObjects (escena)
+            // Assets (pueden incluir Mesh assets, prefabs con renderer, etc.)
             foreach (var obj in Selection.objects)
             {
                 if (obj == null) continue;
+                if (!IsAcceptableMeshSource(obj)) continue;
 
                 MeshFilter resolved = ResolveMeshFilter(obj);
                 if (resolved != null && !group.meshFilters.Contains(resolved))
@@ -2154,9 +2155,11 @@ namespace JaimeCamacho.VAT.Editor
                 }
             }
 
+            // Objetos de escena seleccionados
             foreach (var go in Selection.gameObjects)
             {
                 if (go == null) continue;
+                if (!IsAcceptableMeshSource(go)) continue;
 
                 MeshFilter resolved = ResolveMeshFilter(go);
                 if (resolved != null && !group.meshFilters.Contains(resolved))
@@ -3580,6 +3583,51 @@ namespace JaimeCamacho.VAT.Editor
 
         private const string k_ConvertedAssetsFolder = "Assets/VATConvertedMeshes";
         private static readonly Dictionary<string, MeshFilter> s_convertedCache = new Dictionary<string, MeshFilter>();
+
+
+
+        private static bool IsFolder(UnityEngine.Object obj)
+        {
+            string path = AssetDatabase.GetAssetPath(obj);
+            return !string.IsNullOrEmpty(path) && AssetDatabase.IsValidFolder(path);
+        }
+
+        private static bool IsScene(UnityEngine.Object obj)
+        {
+            string path = AssetDatabase.GetAssetPath(obj);
+            return !string.IsNullOrEmpty(path) &&
+                   System.IO.Path.GetExtension(path).Equals(".unity", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Acepta exclusivamente: Mesh, MeshFilter, SkinnedMeshRenderer,
+        /// y objetos (GO/Component) que contengan MeshFilter o SkinnedMeshRenderer.
+        /// Rechaza carpetas, escenas y cualquier otro tipo.
+        /// </summary>
+        private static bool IsAcceptableMeshSource(UnityEngine.Object obj)
+        {
+            if (obj == null) return false;
+            if (IsFolder(obj) || IsScene(obj)) return false;
+
+            if (obj is Mesh) return true;
+            if (obj is MeshFilter) return true;
+            if (obj is SkinnedMeshRenderer) return true;
+
+            if (obj is GameObject go)
+                return go.GetComponentInChildren<MeshFilter>(true) != null ||
+                       go.GetComponentInChildren<SkinnedMeshRenderer>(true) != null;
+
+            if (obj is Component comp)
+            {
+                var go2 = comp.gameObject;
+                return go2.GetComponentInChildren<MeshFilter>(true) != null ||
+                       go2.GetComponentInChildren<SkinnedMeshRenderer>(true) != null;
+            }
+
+            return false;
+        }
+
+
 
         private MeshFilter ResolveMeshFilter(UnityEngine.Object source)
         {
