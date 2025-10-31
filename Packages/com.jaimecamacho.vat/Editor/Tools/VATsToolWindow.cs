@@ -14,6 +14,8 @@ namespace JaimeCamacho.VAT.Editor
         private const string k_KernelName = "CSMain";
         private const string k_DefaultComputeShaderName = "MeshInfoTextureGen";
         private const string k_DefaultComputeShaderPath = "Packages/com.jaimecamacho.vat/Editor/Tools/AnimationTextureBaker/MeshInfoTextureGen.compute";
+        private const string k_DefaultVatMultipleShaderName = "VZ_MAS_VAT_MultipleMesh";
+        private const string k_DefaultVatMultipleShaderPath = "Packages/com.jaimecamacho.vat/Runtime/Shader/VZ_MAS_VAT_MultipleMesh.shadergraph";
 
         private ComputeShader infoTexGen;
         private GameObject targetObject;
@@ -205,12 +207,14 @@ namespace JaimeCamacho.VAT.Editor
         private void OnEnable()
         {
             TryAssignDefaultComputeShader();
+            TryAssignDefaultVatMultipleShader();
             OnUvVisualExportFolderChanged();
         }
 
         private void OnFocus()
         {
             TryAssignDefaultComputeShader();
+            TryAssignDefaultVatMultipleShader();
         }
 
         private void SetActiveTab(ToolTab tab, bool resetScroll = false)
@@ -512,6 +516,8 @@ namespace JaimeCamacho.VAT.Editor
             DrawStatusMessageIfNeeded(ToolTab.VatCombiner);
 
             DrawMessageCard("Descripción", "Fusiona geometría estática en un mesh optimizado y genera un material VAT Multiple con offsets y rotaciones prehorneados, replicando la herramienta Mesh Combiner Turbo.", MessageType.Info);
+
+            TryAssignDefaultVatMultipleShader();
 
             combinerParentObject = (GameObject)EditorGUILayout.ObjectField("Objeto raíz", combinerParentObject, typeof(GameObject), true);
 
@@ -3650,6 +3656,34 @@ namespace JaimeCamacho.VAT.Editor
             if (shader != null)
             {
                 infoTexGen = shader;
+            }
+        }
+
+        private void TryAssignDefaultVatMultipleShader()
+        {
+            if (combinerVatMultipleShader != null)
+            {
+                return;
+            }
+
+            Shader shader = AssetDatabase.LoadAssetAtPath<Shader>(k_DefaultVatMultipleShaderPath);
+            if (shader == null)
+            {
+                string[] guids = AssetDatabase.FindAssets(k_DefaultVatMultipleShaderName);
+                foreach (string guid in guids)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guid);
+                    shader = AssetDatabase.LoadAssetAtPath<Shader>(path);
+                    if (shader != null)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (shader != null)
+            {
+                combinerVatMultipleShader = shader;
             }
         }
 
