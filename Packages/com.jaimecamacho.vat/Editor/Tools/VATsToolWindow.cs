@@ -2096,6 +2096,8 @@ namespace JaimeCamacho.VAT.Editor
                 }
             }
 
+            DrawMeshFilterDropArea(group);
+
             EditorGUI.indentLevel--;
         }
 
@@ -2170,6 +2172,80 @@ namespace JaimeCamacho.VAT.Editor
             }
 
             if (added) Repaint();
+        }
+
+        private void DrawMeshFilterDropArea(PaintGroup group)
+        {
+            Rect dropRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.helpBox, GUILayout.Height(36f));
+            EditorGUI.HelpBox(dropRect, "Arrastra meshes, Mesh Filters, Skinned Mesh Renderers o prefabs aquí", MessageType.Info);
+
+            HandleMeshFilterDragAndDrop(group, dropRect);
+        }
+
+        private void HandleMeshFilterDragAndDrop(PaintGroup group, Rect dropRect)
+        {
+            Event evt = Event.current;
+            if (evt == null)
+            {
+                return;
+            }
+
+            if (evt.type != EventType.DragUpdated && evt.type != EventType.DragPerform)
+            {
+                return;
+            }
+
+            if (!dropRect.Contains(evt.mousePosition))
+            {
+                return;
+            }
+
+            bool hasValidObject = false;
+            foreach (UnityEngine.Object dragged in DragAndDrop.objectReferences)
+            {
+                if (IsAcceptableMeshSource(dragged))
+                {
+                    hasValidObject = true;
+                    break;
+                }
+            }
+
+            DragAndDrop.visualMode = hasValidObject ? DragAndDropVisualMode.Copy : DragAndDropVisualMode.Rejected;
+
+            if (!hasValidObject)
+            {
+                evt.Use();
+                return;
+            }
+
+            if (evt.type == EventType.DragPerform)
+            {
+                DragAndDrop.AcceptDrag();
+
+                bool added = false;
+                foreach (UnityEngine.Object dragged in DragAndDrop.objectReferences)
+                {
+                    if (!IsAcceptableMeshSource(dragged))
+                    {
+                        continue;
+                    }
+
+                    MeshFilter resolved = ResolveMeshFilter(dragged);
+                    if (resolved != null && !group.meshFilters.Contains(resolved))
+                    {
+                        group.meshFilters.Add(resolved);
+                        added = true;
+                    }
+                }
+
+                if (added)
+                {
+                    InvalidatePainterHierarchy(group);
+                    Repaint();
+                }
+            }
+
+            evt.Use();
         }
 
         private bool AddSelectedMaterials(PaintGroup group)
