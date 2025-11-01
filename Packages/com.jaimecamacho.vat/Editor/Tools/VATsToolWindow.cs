@@ -485,7 +485,7 @@ namespace JaimeCamacho.VAT.Editor
                 string selectedFolder = EditorUtility.OpenFolderPanel("Seleccionar carpeta de salida", Application.dataPath, string.Empty);
                 if (!string.IsNullOrEmpty(selectedFolder))
                 {
-                    string projectRelativePath = ConvertToProjectRelativePath(selectedFolder);
+                    string projectRelativePath = VATEditorUtil.ConvertToProjectRelativePath(selectedFolder);
                     if (!string.IsNullOrEmpty(projectRelativePath))
                     {
                         outputPath = projectRelativePath;
@@ -544,8 +544,8 @@ namespace JaimeCamacho.VAT.Editor
                 string selectedFolder = EditorUtility.OpenFolderPanel("Seleccionar carpeta de salida", Application.dataPath, string.Empty);
                 if (!string.IsNullOrEmpty(selectedFolder))
                 {
-                    string projectRelativePath = ConvertToProjectRelativePath(selectedFolder);
-                    if (!string.IsNullOrEmpty(projectRelativePath) && IsProjectRelativeFolder(projectRelativePath))
+                    string projectRelativePath = VATEditorUtil.ConvertToProjectRelativePath(selectedFolder);
+                    if (!string.IsNullOrEmpty(projectRelativePath) && VATEditorUtil.IsProjectRelativeFolder(projectRelativePath))
                     {
                         combinerOutputPath = projectRelativePath;
                         Repaint();
@@ -1318,7 +1318,7 @@ namespace JaimeCamacho.VAT.Editor
                     return;
                 }
 
-                if (!IsTextureReadable(source, out string reason))
+                if (!VATEditorUtil.IsTextureReadable(source, out string reason))
                 {
                     ReportStatus(reason, MessageType.Error);
                     return;
@@ -1405,7 +1405,7 @@ namespace JaimeCamacho.VAT.Editor
                 return;
             }
 
-            if (!EnsureDirectoryExists(exportFolder))
+            if (!VATEditorUtil.EnsureDirectoryExists(exportFolder))
             {
                 return;
             }
@@ -1461,7 +1461,7 @@ namespace JaimeCamacho.VAT.Editor
             exportFolder = string.Empty;
             projectRelativePath = string.Empty;
 
-            string normalizedFolder = NormalizeProjectRelativePath(uvVisualAtlasExportFolder);
+            string normalizedFolder = VATEditorUtil.NormalizeProjectRelativePath(uvVisualAtlasExportFolder);
             if (string.IsNullOrEmpty(normalizedFolder))
             {
                 return false;
@@ -1472,7 +1472,7 @@ namespace JaimeCamacho.VAT.Editor
                 return false;
             }
 
-            string sanitizedFileName = SanitizeAtlasFileName(uvVisualAtlasExportFileName, defaultName, out string sanitizedBaseName);
+            string sanitizedFileName = VATEditorUtil.SanitizeAtlasFileName(uvVisualAtlasExportFileName, defaultName, out string sanitizedBaseName);
             if (string.IsNullOrEmpty(sanitizedFileName))
             {
                 sanitizedFileName = defaultName + ".png";
@@ -1480,7 +1480,7 @@ namespace JaimeCamacho.VAT.Editor
             }
 
             exportFolder = normalizedFolder;
-            projectRelativePath = CombineProjectRelativePath(normalizedFolder, sanitizedFileName);
+            projectRelativePath = VATEditorUtil.CombineProjectRelativePath(normalizedFolder, sanitizedFileName);
 
             bool needsRepaint = false;
 
@@ -1504,67 +1504,6 @@ namespace JaimeCamacho.VAT.Editor
             return true;
         }
 
-        private static string CombineProjectRelativePath(string folder, string fileName)
-        {
-            if (string.IsNullOrEmpty(folder))
-            {
-                return fileName ?? string.Empty;
-            }
-
-            folder = folder.Replace('\\', '/').TrimEnd('/');
-
-            if (string.IsNullOrEmpty(fileName))
-            {
-                return folder;
-            }
-
-            return $"{folder}/{fileName}";
-        }
-
-        private static string SanitizeAtlasFileName(string candidate, string defaultName, out string sanitizedBaseName)
-        {
-            sanitizedBaseName = string.Empty;
-
-            string workingName = string.IsNullOrWhiteSpace(candidate) ? defaultName : candidate.Trim();
-            if (string.IsNullOrEmpty(workingName))
-            {
-                workingName = defaultName;
-            }
-
-            char[] invalidChars = Path.GetInvalidFileNameChars();
-            StringBuilder builder = new StringBuilder(workingName.Length);
-            foreach (char character in workingName)
-            {
-                builder.Append(Array.IndexOf(invalidChars, character) >= 0 ? '_' : character);
-            }
-
-            string sanitized = builder.ToString();
-            if (string.IsNullOrEmpty(sanitized))
-            {
-                sanitized = defaultName;
-            }
-
-            string extension = Path.GetExtension(sanitized);
-            if (string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase))
-            {
-                sanitizedBaseName = Path.GetFileNameWithoutExtension(sanitized);
-                return sanitized;
-            }
-
-            if (!string.IsNullOrEmpty(extension))
-            {
-                sanitized = sanitized.Substring(0, sanitized.Length - extension.Length);
-            }
-
-            if (string.IsNullOrEmpty(sanitized))
-            {
-                sanitized = defaultName;
-            }
-
-            sanitizedBaseName = sanitized;
-            return sanitized + ".png";
-        }
-
         private bool IsUvVisualAtlasExportPathValid()
         {
             if (string.IsNullOrEmpty(uvVisualAtlasExportFolder))
@@ -1572,7 +1511,7 @@ namespace JaimeCamacho.VAT.Editor
                 return false;
             }
 
-            string normalizedFolder = NormalizeProjectRelativePath(uvVisualAtlasExportFolder);
+            string normalizedFolder = VATEditorUtil.NormalizeProjectRelativePath(uvVisualAtlasExportFolder);
             if (string.IsNullOrEmpty(normalizedFolder))
             {
                 return false;
@@ -1583,7 +1522,7 @@ namespace JaimeCamacho.VAT.Editor
                 return false;
             }
 
-            return IsProjectRelativeFolder(normalizedFolder);
+            return VATEditorUtil.IsProjectRelativeFolder(normalizedFolder);
         }
 
         private static void CopyTextureToAtlas(Texture2D source, Texture2D atlas, int offsetX, int offsetY, int targetResolution)
@@ -1602,38 +1541,6 @@ namespace JaimeCamacho.VAT.Editor
                     atlas.SetPixel(offsetX + x, offsetY + y, sampled);
                 }
             }
-        }
-
-        private static bool IsTextureReadable(Texture2D texture, out string reason)
-        {
-            reason = string.Empty;
-
-            if (texture == null)
-            {
-                reason = "La textura proporcionada es nula.";
-                return false;
-            }
-
-            if (texture.isReadable)
-            {
-                return true;
-            }
-
-            string assetPath = AssetDatabase.GetAssetPath(texture);
-            if (!string.IsNullOrEmpty(assetPath))
-            {
-                if (AssetImporter.GetAtPath(assetPath) is TextureImporter importer)
-                {
-                    if (!importer.isReadable)
-                    {
-                        reason = $"La textura '{texture.name}' no es legible. Habilita la opción Read/Write en su importador para poder generar el atlas.";
-                        return false;
-                    }
-                }
-            }
-
-            reason = $"La textura '{texture.name}' no permite lectura en modo de edición.";
-            return false;
         }
 
         private static void DrawUvVisualBackground(Rect rect)
@@ -2909,7 +2816,7 @@ namespace JaimeCamacho.VAT.Editor
                 return false;
             }
 
-            return IsProjectRelativeFolder(combinerOutputPath);
+            return VATEditorUtil.IsProjectRelativeFolder(combinerOutputPath);
         }
 
         private bool CanBake()
@@ -3056,13 +2963,13 @@ namespace JaimeCamacho.VAT.Editor
 
         private bool TryAssignOutputPath(string rawPath, ref string targetPath)
         {
-            string projectRelativePath = ConvertToProjectRelativePath(rawPath);
+            string projectRelativePath = VATEditorUtil.ConvertToProjectRelativePath(rawPath);
             if (string.IsNullOrEmpty(projectRelativePath))
             {
                 return false;
             }
 
-            if (!IsProjectRelativeFolder(projectRelativePath))
+            if (!VATEditorUtil.IsProjectRelativeFolder(projectRelativePath))
             {
                 return false;
             }
@@ -3074,101 +2981,6 @@ namespace JaimeCamacho.VAT.Editor
             }
 
             return true;
-        }
-
-        private bool IsProjectRelativeFolder(string projectRelativePath)
-        {
-            if (AssetDatabase.IsValidFolder(projectRelativePath))
-            {
-                return true;
-            }
-
-            string projectRoot = Path.GetDirectoryName(Application.dataPath);
-            if (string.IsNullOrEmpty(projectRoot))
-            {
-                return false;
-            }
-
-            string absolutePath = Path.Combine(projectRoot, projectRelativePath);
-            if (string.IsNullOrEmpty(absolutePath))
-            {
-                return false;
-            }
-
-            if (File.Exists(absolutePath))
-            {
-                return false;
-            }
-
-            return true;
-        }
-
-        private string ConvertToProjectRelativePath(string path)
-        {
-            if (string.IsNullOrEmpty(path))
-            {
-                return string.Empty;
-            }
-
-            string normalizedPath = path.Replace('\\', '/').Trim();
-            if (normalizedPath.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            if (normalizedPath.StartsWith("Assets", StringComparison.OrdinalIgnoreCase))
-            {
-                return NormalizeProjectRelativePath(normalizedPath);
-            }
-
-            string dataPath = Application.dataPath.Replace('\\', '/');
-            if (normalizedPath.StartsWith(dataPath, StringComparison.OrdinalIgnoreCase))
-            {
-                string relativePath = "Assets" + normalizedPath.Substring(dataPath.Length);
-                return NormalizeProjectRelativePath(relativePath);
-            }
-
-            return string.Empty;
-        }
-
-        private static string NormalizeProjectRelativePath(string path)
-        {
-            if (string.IsNullOrEmpty(path))
-            {
-                return string.Empty;
-            }
-
-            string sanitizedPath = path.Replace('\\', '/').Trim();
-            if (sanitizedPath.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            string[] segments = sanitizedPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-            if (segments.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            if (!segments[0].Equals("Assets", StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Empty;
-            }
-
-            for (int i = 1; i < segments.Length; i++)
-            {
-                if (segments[i] == "." || segments[i] == "..")
-                {
-                    return string.Empty;
-                }
-            }
-
-            if (segments.Length == 1)
-            {
-                return "Assets";
-            }
-
-            return "Assets/" + string.Join("/", segments, 1, segments.Length - 1);
         }
 
         private bool ValidateCombinerInputs()
@@ -3282,7 +3094,7 @@ namespace JaimeCamacho.VAT.Editor
             Material vatMaterial = new Material(combinerVatMultipleShader);
             if (originalMaterials.Count > 0)
             {
-                CopyMaterialProperties(originalMaterials[0], vatMaterial);
+                VATEditorUtil.CopyMaterialProperties(originalMaterials[0], vatMaterial);
             }
 
             vatMaterial.SetInt("_NumberOfMeshes", combineInstances.Count);
@@ -3291,7 +3103,7 @@ namespace JaimeCamacho.VAT.Editor
             MeshRenderer finalRenderer = combinedObject.AddComponent<MeshRenderer>();
             finalRenderer.sharedMaterial = vatMaterial;
 
-            if (!EnsureDirectoryExists(combinerOutputPath))
+            if (!VATEditorUtil.EnsureDirectoryExists(combinerOutputPath))
             {
                 DestroyImmediate(combinedObject);
                 return;
@@ -3327,44 +3139,6 @@ namespace JaimeCamacho.VAT.Editor
 
             ReportStatus($"Combinación completada. Recursos guardados en '{combinerOutputPath}'.", MessageType.Info);
             SceneView.RepaintAll();
-        }
-
-        private static void CopyMaterialProperties(Material source, Material destination)
-        {
-            if (source == null || destination == null)
-            {
-                return;
-            }
-
-            Shader sourceShader = source.shader;
-            if (sourceShader == null)
-            {
-                return;
-            }
-
-            int propertyCount = ShaderUtil.GetPropertyCount(sourceShader);
-            for (int i = 0; i < propertyCount; i++)
-            {
-                string propertyName = ShaderUtil.GetPropertyName(sourceShader, i);
-                ShaderUtil.ShaderPropertyType propertyType = ShaderUtil.GetPropertyType(sourceShader, i);
-
-                switch (propertyType)
-                {
-                    case ShaderUtil.ShaderPropertyType.Color:
-                        destination.SetColor(propertyName, source.GetColor(propertyName));
-                        break;
-                    case ShaderUtil.ShaderPropertyType.Vector:
-                        destination.SetVector(propertyName, source.GetVector(propertyName));
-                        break;
-                    case ShaderUtil.ShaderPropertyType.Float:
-                    case ShaderUtil.ShaderPropertyType.Range:
-                        destination.SetFloat(propertyName, source.GetFloat(propertyName));
-                        break;
-                    case ShaderUtil.ShaderPropertyType.TexEnv:
-                        destination.SetTexture(propertyName, source.GetTexture(propertyName));
-                        break;
-                }
-            }
         }
 
         private void BakeVatPositionTextures()
@@ -3462,7 +3236,7 @@ namespace JaimeCamacho.VAT.Editor
                             infoTexGen.Dispatch(kernel, dispatchX, dispatchY, 1);
                         }
 
-                        Texture2D bakedTexture = RenderTextureToTexture2D.Convert(positionTexture);
+                        Texture2D bakedTexture = VATEditorUtil.RenderTextureToTexture2D(positionTexture);
                         SaveTextureAsset(bakedTexture, positionTexture.name);
                     }
                     finally
@@ -3527,38 +3301,7 @@ namespace JaimeCamacho.VAT.Editor
 
         private bool EnsureOutputDirectory()
         {
-            return EnsureDirectoryExists(outputPath);
-        }
-
-        private bool EnsureDirectoryExists(string projectRelativePath)
-        {
-            if (string.IsNullOrEmpty(projectRelativePath))
-            {
-                ReportStatus("La ruta de salida no puede estar vacía.", MessageType.Error);
-                return false;
-            }
-
-            string projectRoot = Path.GetDirectoryName(Application.dataPath);
-            if (string.IsNullOrEmpty(projectRoot))
-            {
-                ReportStatus("No se pudo determinar la ruta raíz del proyecto.", MessageType.Error);
-                return false;
-            }
-
-            string absolutePath = Path.Combine(projectRoot, projectRelativePath);
-            if (string.IsNullOrEmpty(absolutePath))
-            {
-                ReportStatus("No se pudo resolver el directorio de salida.", MessageType.Error);
-                return false;
-            }
-
-            if (!Directory.Exists(absolutePath))
-            {
-                Directory.CreateDirectory(absolutePath);
-                AssetDatabase.Refresh();
-            }
-
-            return true;
+            return VATEditorUtil.EnsureDirectoryExists(outputPath);
         }
 
         private int CalculateFrameCount(float clipLength)
@@ -3727,23 +3470,6 @@ namespace JaimeCamacho.VAT.Editor
             public Vector3 normal;
             public Vector3 tangent;
         }
-
-        private static class RenderTextureToTexture2D
-        {
-            public static Texture2D Convert(RenderTexture renderTexture)
-            {
-                Texture2D texture = new Texture2D(renderTexture.width, renderTexture.height, TextureFormat.RGBAHalf, false);
-
-                RenderTexture previous = RenderTexture.active;
-                RenderTexture.active = renderTexture;
-                texture.ReadPixels(new Rect(0, 0, renderTexture.width, renderTexture.height), 0, 0);
-                texture.Apply();
-                RenderTexture.active = previous;
-
-                return texture;
-            }
-        }
-
 
         private const string k_ConvertedAssetsFolder = "Assets/VATConvertedMeshes";
         private static readonly Dictionary<string, MeshFilter> s_convertedCache = new Dictionary<string, MeshFilter>();
