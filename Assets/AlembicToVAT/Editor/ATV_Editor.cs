@@ -13,6 +13,18 @@ public enum TopologyType
 	Fixed	
 }
 
+
+public enum VATLookupUVChannel
+{
+    // Unity naming:
+    // uv2 -> TEXCOORD1 (commonly used by Lightmaps)
+    // uv3 -> TEXCOORD2
+    // uv4 -> TEXCOORD3
+    UV2 = 1,
+    UV3 = 2,
+    UV4 = 3
+}
+
 public class ATV_Editor : EditorWindow
 {  
 	public string ExportPath = "Assets/ExportVAT/";
@@ -22,6 +34,7 @@ public class ATV_Editor : EditorWindow
 	public float EndTime = 10.0f;
 	public float SampleRate = 24.0f;
 	public bool StoreCenterPositionInUV3 = false;
+	public VATLookupUVChannel VatLookupUVChannel = VATLookupUVChannel.UV2;
     public bool FromBlender = false;
     public bool UnlitMesh = false;
     public bool CompressNormal = false;
@@ -127,6 +140,7 @@ void OnGUI()
 			if (!float.IsFinite(SampleRate))
 				SampleRate = 60.0f;
 			StoreCenterPositionInUV3 = EditorGUILayout.Toggle("Store position in UV3", StoreCenterPositionInUV3);
+			VatLookupUVChannel = (VATLookupUVChannel)EditorGUILayout.EnumPopup("VAT lookup UV channel", VatLookupUVChannel);
 			FromBlender = EditorGUILayout.Toggle("Exported from Blender", FromBlender);
             UnlitMesh = EditorGUILayout.Toggle("Unlit mesh", UnlitMesh);
 			if (!UnlitMesh)
@@ -331,6 +345,7 @@ void OnGUI()
 		{
 			bool hasNormal = false;
 			bool hasUVs = false;
+			bool hasUV2 = false;
 			bool hasColors = false;
 
 			if (VariableTopology == TopologyType.Variable)
@@ -361,13 +376,15 @@ void OnGUI()
 
 						hasNormal |= (localMeshFilter.sharedMesh.normals.Length>0);
 						hasColors |= (localMeshFilter.sharedMesh.colors.Length>0);
-						hasUVs |= (localMeshFilter.sharedMesh.uv.Length>0);				
+						hasUVs |= (localMeshFilter.sharedMesh.uv.Length>0);
+					hasUV2 |= (localMeshFilter.sharedMesh.uv2.Length>0);				
 					}
 				}		
 			}
 
 			vertices = new Vector3[verticesCount];
 			uv = new Vector2[verticesCount];
+			Vector2[] uv2Original = new Vector2[verticesCount];
 			uv3 = new Vector3[verticesCount];
 			normals = new Vector3[verticesCount];
 			colors = new Color[verticesCount];
@@ -410,6 +427,13 @@ void OnGUI()
 								uv[j + verticesOffset] = localMeshFilter.sharedMesh.uv[j];
 							if (hasColors)
 								colors[j + verticesOffset] = localMeshFilter.sharedMesh.colors[j];
+							if (hasUV2)
+							{
+								// Preserve original UV2 (TEXCOORD1). This is commonly used for lightmaps.
+								// If the source mesh doesn't have UV2, Unity returns an empty array; in that case we keep default (0,0).
+								if (localMeshFilter.sharedMesh.uv2 != null && localMeshFilter.sharedMesh.uv2.Length == localMeshFilter.sharedMesh.vertices.Length)
+									uv2Original[j + verticesOffset] = localMeshFilter.sharedMesh.uv2[j];
+							}
 
 							vertices[j + verticesOffset] = localMeshFilter.sharedMesh.vertices[j];
 							center += localMeshFilter.sharedMesh.vertices[j];
@@ -438,13 +462,20 @@ void OnGUI()
 			bakedMesh.vertices = vertices;
 			if (hasUVs)
 				bakedMesh.uv = uv;
+			if (hasUV2)
+				bakedMesh.uv2 = uv2Original;
 			if (hasNormal)
 				bakedMesh.normals = normals;
 			if (hasColors)
 				bakedMesh.colors = colors;
 			bakedMesh.triangles = triangles;
 			if (StoreCenterPositionInUV3)
-				bakedMesh.SetUVs(2,uv3);
+			{
+				// NOTE: UV3 (TEXCOORD2) may be reserved for VAT lookup depending on user choice.
+				// If VAT is stored in UV3, we push the center position to UV4 (TEXCOORD3) to avoid collisions.
+				int centerUvChannel = (VatLookupUVChannel == VATLookupUVChannel.UV3) ? 3 : 2;
+				bakedMesh.SetUVs(centerUvChannel, uv3);
+			}
 
 			int[] textureSize = {32,64,128,256,512,1024,2048,4096,8192,16384};
 			bakedMesh.RecalculateBounds();
@@ -682,7 +713,20 @@ void OnGUI()
                     AssetDatabase.SaveAssets();
                 }
 
-                bakedMesh.uv2 = uv2;
+                // Store VAT lookup UVs in the selected channel.
+                // Default legacy behavior was UV2 (TEXCOORD1), but UV2 is commonly used for lightmaps.
+                switch (VatLookupUVChannel)
+                {
+                    case VATLookupUVChannel.UV2:
+                        bakedMesh.uv2 = uv2;
+                        break;
+                    case VATLookupUVChannel.UV3:
+                        bakedMesh.SetUVs(2, new List<Vector2>(uv2));
+                        break;
+                    case VATLookupUVChannel.UV4:
+                        bakedMesh.SetUVs(3, new List<Vector2>(uv2));
+                        break;
+                }
 			}
 
 
