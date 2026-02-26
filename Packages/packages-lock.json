@@ -76,6 +76,13 @@
       },
       "url": "https://packages.unity.com"
     },
+    "com.unity.editorcoroutines": {
+      "version": "1.0.1",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {},
+      "url": "https://packages.unity.com"
+    },
     "com.unity.ext.nunit": {
       "version": "2.0.5",
       "depth": 2,
@@ -92,6 +99,17 @@
         "com.unity.cinemachine": "3.1.4",
         "com.unity.formats.fbx": "5.1.5"
       }
+    },
+    "com.unity.formats.alembic": {
+      "version": "2.4.4",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {
+        "com.unity.timeline": "1.8.7",
+        "com.unity.modules.cloth": "1.0.0",
+        "com.unity.modules.unityanalytics": "1.0.0"
+      },
+      "url": "https://packages.unity.com"
     },
     "com.unity.formats.fbx": {
       "version": "5.1.5",
@@ -275,6 +293,14 @@
       "source": "builtin",
       "dependencies": {}
     },
+    "com.unity.modules.cloth": {
+      "version": "1.0.0",
+      "depth": 1,
+      "source": "builtin",
+      "dependencies": {
+        "com.unity.modules.physics": "1.0.0"
+      }
+    },
     "com.unity.modules.director": {
       "version": "1.0.0",
       "depth": 2,
@@ -315,6 +341,21 @@
       "dependencies": {}
     },
     "com.unity.modules.ui": {
+      "version": "1.0.0",
+      "depth": 2,
+      "source": "builtin",
+      "dependencies": {}
+    },
+    "com.unity.modules.unityanalytics": {
+      "version": "1.0.0",
+      "depth": 1,
+      "source": "builtin",
+      "dependencies": {
+        "com.unity.modules.unitywebrequest": "1.0.0",
+        "com.unity.modules.jsonserialize": "1.0.0"
+      }
+    },
+    "com.unity.modules.unitywebrequest": {
       "version": "1.0.0",
       "depth": 2,
       "source": "builtin",
