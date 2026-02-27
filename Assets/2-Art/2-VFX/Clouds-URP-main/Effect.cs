@@ -18,15 +18,27 @@ public class Effect : ScriptableRendererFeature
     class Pass : ScriptableRenderPass
     {
         public Settings settings;
+#if UNITY_2022_1_OR_NEWER
+        private RTHandle source;
+        private RTHandle tempTexture;
+#else
         private RenderTargetIdentifier source;
-        RenderTargetHandle tempTexture;
+        private RenderTargetHandle tempTexture;
+#endif
 
         private string profilerTag;
 
+#if UNITY_2022_1_OR_NEWER
+        public void Setup(RTHandle source)
+        {
+            this.source = source;
+        }
+#else
         public void Setup(RenderTargetIdentifier source)
         {
             this.source = source;
         }
+#endif
 
         public Pass(string profilerTag)
         {
@@ -35,8 +47,13 @@ public class Effect : ScriptableRendererFeature
 
         public override void Configure(CommandBuffer cmd, RenderTextureDescriptor cameraTextureDescriptor)
         {
+#if UNITY_2022_1_OR_NEWER
+            RenderingUtils.ReAllocateIfNeeded(ref tempTexture, cameraTextureDescriptor, FilterMode.Bilinear, TextureWrapMode.Clamp, name: "_EffectTempTexture");
+            ConfigureTarget(tempTexture);
+#else
             cmd.GetTemporaryRT(tempTexture.id, cameraTextureDescriptor);
             ConfigureTarget(tempTexture.Identifier());
+#endif
             ConfigureClear(ClearFlag.All, Color.black);
         }
 
@@ -47,7 +64,11 @@ public class Effect : ScriptableRendererFeature
 
             //it is very important that if something fails our code still calls 
             //CommandBufferPool.Release(cmd) or we will have a HUGE memory leak
-            if(settings.material == null) return;
+            if(settings.material == null)
+            {
+                CommandBufferPool.Release(cmd);
+                return;
+            }
 
             try
             {
@@ -59,8 +80,13 @@ public class Effect : ScriptableRendererFeature
                 // enabled and the scene view doesnt have MSAA,
                 // so the scene view will be pure black
 
+#if UNITY_2022_1_OR_NEWER
+                Blitter.BlitCameraTexture(cmd, source, tempTexture);
+                Blitter.BlitCameraTexture(cmd, tempTexture, source, settings.material, 0);
+#else
                 cmd.Blit(source, tempTexture.Identifier());
                 cmd.Blit(tempTexture.Identifier(), source, settings.material, 0);
+#endif
 
                 context.ExecuteCommandBuffer(cmd);
             }
@@ -71,10 +97,16 @@ public class Effect : ScriptableRendererFeature
             cmd.Clear();
             CommandBufferPool.Release(cmd);
         }
+
+        public void Dispose()
+        {
+#if UNITY_2022_1_OR_NEWER
+            tempTexture?.Release();
+#endif
+        }
     }
 
     Pass pass;
-    RenderTargetHandle renderTextureHandle;
     public override void Create()
     {
         pass = new Pass("Effect");
@@ -85,7 +117,7 @@ public class Effect : ScriptableRendererFeature
 #if UNITY_2022_1_OR_NEWER
     public override void SetupRenderPasses(ScriptableRenderer renderer, in RenderingData renderingData)
     {
-        var cameraColorTargetIdent = renderer.cameraColorTarget;
+        var cameraColorTargetIdent = renderer.cameraColorTargetHandle;
         pass.Setup(cameraColorTargetIdent);
     }
 
@@ -102,6 +134,10 @@ public class Effect : ScriptableRendererFeature
         renderer.EnqueuePass(pass);
     }
 #endif
-}
 
+    protected override void Dispose(bool disposing)
+    {
+        pass?.Dispose();
+    }
+}
 
