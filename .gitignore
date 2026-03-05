@@ -59,7 +59,6 @@ crashlytics-build.properties
 # Artefactos de compilación (builds) - binarios resultantes
 *.apk
 *.aab
-*.unitypackage
 *.app
 *.exe
 *_DoNotShip*
