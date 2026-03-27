@@ -6,10 +6,12 @@
     "com.unity.editorcoroutines": "1.0.1",
     "com.unity.feature.characters-animation": "1.0.0",
     "com.unity.formats.alembic": "2.4.4",
-    "com.unity.ide.visualstudio": "2.0.25",
-    "com.unity.render-pipelines.universal": "17.0.4",
-    "com.unity.visualeffectgraph": "17.0.4",
-    "com.unity.visualscripting": "1.9.9"
+    "com.unity.ide.visualstudio": "2.0.26",
+    "com.unity.render-pipelines.universal": "17.3.0",
+    "com.unity.visualeffectgraph": "17.3.0",
+    "com.unity.visualscripting": "1.9.9",
+    "com.unity.modules.adaptiveperformance": "1.0.0",
+    "com.unity.modules.vectorgraphics": "1.0.0"
   },
   "scopedRegistries": [
     {
