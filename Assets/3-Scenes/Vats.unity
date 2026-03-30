@@ -633,7 +633,7 @@ GameObject:
   - component: {fileID: 1642350843}
   - component: {fileID: 1642350842}
   m_Layer: 0
-  m_Name: New VFX
+  m_Name: Cucarachas_VFX
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -653,7 +653,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Unity.VisualEffectGraph.Runtime::UnityEngine.VFX.Utility.VFXTransformBinder
   Space: 0
   m_Property:
-    m_Name: New Transform
+    m_Name: TransformForFlee
   Target: {fileID: 649190626}
 --- !u!114 &1642350843
 MonoBehaviour:
@@ -735,7 +735,10 @@ VisualEffect:
   m_ResourceVersion: 1
   m_PropertySheet:
     m_Float:
-      m_Array: []
+      m_Array:
+      - m_Value: 15
+        m_Name: SpawnRate
+        m_Overridden: 1
     m_Vector2f:
       m_Array: []
     m_Vector3f:
@@ -748,6 +751,15 @@ VisualEffect:
         m_Overridden: 1
       - m_Value: {x: 1, y: 1, z: 1}
         m_Name: New Transform_scale
+        m_Overridden: 1
+      - m_Value: {x: -0, y: 0, z: 0}
+        m_Name: TransformForFlee_angles
+        m_Overridden: 1
+      - m_Value: {x: -2.7, y: -0.007, z: -1.08}
+        m_Name: TransformForFlee_position
+        m_Overridden: 1
+      - m_Value: {x: 1, y: 1, z: 1}
+        m_Name: TransformForFlee_scale
         m_Overridden: 1
     m_Vector4f:
       m_Array: []
