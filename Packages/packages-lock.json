@@ -28,11 +28,25 @@
       "dependencies": {},
       "url": "https://registry.npmjs.org"
     },
+    "com.jaimecamacho.unitymultitool": {
+      "version": "1.0.2",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {},
+      "url": "https://registry.npmjs.org"
+    },
     "com.jaimecamacho.vat": {
       "version": "file:com.jaimecamacho.vat",
       "depth": 0,
       "source": "embedded",
       "dependencies": {}
+    },
+    "com.lukestilson.openvat": {
+      "version": "https://github.com/sharpen3d/openvat-unity.git",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {},
+      "hash": "e264f863ce29d7e3e081f81daf784a1fde02a661"
     },
     "com.unity.animation.rigging": {
       "version": "1.4.1",
