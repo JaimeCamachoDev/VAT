@@ -30,9 +30,9 @@ Desactiva funciones que no necesitas en `Settings → Features`:
 - [ ] Dejar Topics necesarios.
 
 ## Proceso y metodologia
-- [ ] Se ha utilizado la herramienta OpenVAT (https://openvat.org/#engines) instalando el paquete en unity mediante Github URL e instalando el addon en blender
-- [ ] Despues dentro de blender se mete el modelo con la animación, se saca la pestaña de OpenVAT, ahi hay que seleccionar una carpeta para exportar asi como configurar formato de exportacion
-- [ ] Una vez exportado dentro de unity en Tools se selecciona OpenVATEditor, hay que importar a unity todos los archivos que se han sacado de blender y usando el editor se selecciona la carpeta importada en unity
+- [ ] Se ha utilizado la herramienta OpenVAT (https://openvat.org/#engines) instalando el paquete en unity mediante Github URL (El metodo 2, el 1 no va) e instalando el addon en blender
+- [ ] Despues dentro de blender se mete el modelo con la animación, se saca la pestaña de OpenVAT, en la pestaña de los add-ons, si no te sale presiona "n". Ahi hay que seleccionar una carpeta para exportar asi como configurar formato de exportacion
+- [ ] Una vez exportado dentro de unity en Tools -> OpenVATEditor, hay que importar a unity todos los archivos que se han sacado de blender (la textura, el mesh y el remap.json) y usando el editor se selecciona la carpeta importada en unity y le das al boton Process OpenVAT
 - [ ] Por ultimo asegurarse que el formato de las imagenes no esta en automatico sino en RBG 32 bits 
 
 
