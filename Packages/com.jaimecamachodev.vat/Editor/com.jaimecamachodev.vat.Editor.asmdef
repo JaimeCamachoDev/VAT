@@ -1,0 +1,5 @@
+{
+  "name": "com.jaimecamachodev.vat.Editor",
+  "references": ["com.jaimecamachodev.vat.Runtime"],
+  "includePlatforms": ["Editor"]
+}
