@@ -35,8 +35,8 @@
       "dependencies": {},
       "url": "https://registry.npmjs.org"
     },
-    "com.jaimecamacho.vat": {
-      "version": "file:com.jaimecamacho.vat",
+    "com.jaimecamachodev.vat": {
+      "version": "file:com.jaimecamachodev.vat",
       "depth": 0,
       "source": "embedded",
       "dependencies": {}

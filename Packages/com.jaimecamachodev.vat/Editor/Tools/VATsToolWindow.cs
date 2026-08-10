@@ -13,9 +13,9 @@ namespace JaimeCamacho.VAT.Editor
         private const float k_DefaultFrameSampleStep = 0.05f;
         private const string k_KernelName = "CSMain";
         private const string k_DefaultComputeShaderName = "MeshInfoTextureGen";
-        private const string k_DefaultComputeShaderPath = "Packages/com.jaimecamacho.vat/Editor/Tools/AnimationTextureBaker/MeshInfoTextureGen.compute";
+        private const string k_DefaultComputeShaderPath = "Packages/com.jaimecamachodev.vat/Editor/Tools/AnimationTextureBaker/MeshInfoTextureGen.compute";
         private const string k_DefaultVatMultipleShaderName = "VZ_MAS_VAT_MultipleMesh";
-        private const string k_DefaultVatMultipleShaderPath = "Packages/com.jaimecamacho.vat/Runtime/Shader/VZ_MAS_VAT_MultipleMesh.shadergraph";
+        private const string k_DefaultVatMultipleShaderPath = "Packages/com.jaimecamachodev.vat/Runtime/Shader/VZ_MAS_VAT_MultipleMesh.shadergraph";
 
         private ComputeShader infoTexGen;
         private GameObject targetObject;

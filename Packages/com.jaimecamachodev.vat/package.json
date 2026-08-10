@@ -1,0 +1,28 @@
+{
+  "name": "com.jaimecamachodev.vat",
+  "version": "1.0.0",
+  "displayName": "VAT",
+  "description": "Herramienta para la creacion de VATS",
+  "unity": "6000.0",
+  "unityRelease": "0f1",
+  "license": "MIT",
+  "documentationUrl": "https://github.com/JaimeCamachoDev/VAT",
+  "changelogUrl": "https://github.com/JaimeCamachoDev/VAT/releases",
+  "licensesUrl": "https://github.com/JaimeCamachoDev/VAT/blob/main/LICENSE",
+  "keywords": [
+    "unity",
+    "vat",
+    "vertex animation texture",
+    "editor",
+    "animation"
+  ],
+  "author": {
+    "name": "JaimeCamachoDev",
+    "url": "https://github.com/JaimeCamachoDev",
+    "email": "jaime.camacho.dev@gmail.com"
+  },
+  "repository": {
+    "url": "https://github.com/JaimeCamachoDev/VAT.git",
+    "type": "git"
+  }
+}
