@@ -6,34 +6,25 @@
 
 _**Vertex animation texture**_
 
-
 </header>
-   
-<footer>
-   
-## Después de crear el repositorio desde la plantilla, asegúrate de revisar lo siguiente:
 
-### 📸 Social Preview
-- [ ] Sube una imagen `preview.png` personalizada en `Settings → Social Preview`.
+## Requisitos
 
-### ⚙️ Repository Features
-Desactiva funciones que no necesitas en `Settings → Features`:
+* Unity **6000.3.10f1**
+* Render Pipeline: Universal Render Pipeline (URP)
+* Paquetes: Visual Effect Graph, Alembic
 
-- [ ] Desactivar **Projects**
-- [ ] Desactivar **Wiki**
-- [ ] Desactivar **Packages**
-- [ ] Desactivar **Environments** (Deployments)
-- [ ] Confirmar que **Releases** sigue activado ✅
+## Contenido
 
-### 🎨 Personalización visual
-- [ ] Cambiar imagen del banner de portada.
-- [ ] Dejar Topics necesarios.
+* **VFX Graph:** `EscarabajoVFX`, `VATs_Plantilla_VFX`
+* **Shader Graph:** `CocodrilosVAT`, `VAT_SRP_Lit_Material`, `VAT_SRP_Unlit_Material`, `VZ_Unlit_VAT_MultipleMesh`, `VZ_Unlit_VAT_SingleMesh`
+* **Sub Graphs:** `Dissolve_SubGraph`
+* **Shaders HLSL:** `VAT_Legacy_Material`
+* **Prefabs:** `Beetle.001`, `EscarabajoVFX`, `Paint Group 1_1_f30d34e1a4c8406ca056724eca7add51_TurboCombined`, `SmokeSurface_prefab`, `Tela_prefab`, `VATS_1`, `VATS_1 j`, `VATS_1k`, `VATS_1k_1`, `VATS_2 j ` y 2 más
+* **Escenas:** `Assets/3-Scenes/Main.unity`, `Assets/3-Scenes/Vats.unity`, `Assets/3-Scenes/test.unity`
 
-## Proceso y metodologia
-- [ ] Se ha utilizado la herramienta OpenVAT (https://openvat.org/#engines) instalando el paquete en unity mediante Github URL (El metodo 2, el 1 no va) e instalando el addon en blender
-- [ ] Despues dentro de blender se mete el modelo con la animación, se saca la pestaña de OpenVAT, en la pestaña de los add-ons, si no te sale presiona "n". Ahi hay que seleccionar una carpeta para exportar asi como configurar formato de exportacion
-- [ ] Una vez exportado dentro de unity en Tools -> OpenVATEditor, hay que importar a unity todos los archivos que se han sacado de blender (la textura, el mesh y el remap.json) y usando el editor se selecciona la carpeta importada en unity y le das al boton Process OpenVAT
-- [ ] Por ultimo asegurarse que el formato de las imagenes no esta en automatico sino en RBG 32 bits 
+## Uso
 
-
-</footer>
+1. Clona el repositorio y añádelo en Unity Hub (*Add project from disk*).
+2. Ábrelo con Unity **6000.3.10f1**.
+3. Abre la escena `Assets/3-Scenes/Main.unity` y pulsa **Play**.
