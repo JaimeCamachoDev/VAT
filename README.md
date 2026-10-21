@@ -16,12 +16,17 @@ _**Vertex animation texture**_
 
 ## Contenido
 
-* **VFX Graph:** `EscarabajoVFX`, `VATs_Plantilla_VFX`
-* **Shader Graph:** `CocodrilosVAT`, `VAT_SRP_Lit_Material`, `VAT_SRP_Unlit_Material`, `VZ_Unlit_VAT_MultipleMesh`, `VZ_Unlit_VAT_SingleMesh`
-* **Sub Graphs:** `Dissolve_SubGraph`
-* **Shaders HLSL:** `VAT_Legacy_Material`
-* **Prefabs:** `Beetle.001`, `EscarabajoVFX`, `Paint Group 1_1_f30d34e1a4c8406ca056724eca7add51_TurboCombined`, `SmokeSurface_prefab`, `Tela_prefab`, `VATS_1`, `VATS_1 j`, `VATS_1k`, `VATS_1k_1`, `VATS_2 j ` y 2 más
-* **Escenas:** `Assets/3-Scenes/Main.unity`, `Assets/3-Scenes/Vats.unity`, `Assets/3-Scenes/test.unity`
+Efectos en `Assets/2-Art/2-VFX/`:
+
+| Efecto | VFX | Shader Graph | Shaders | Scripts | Prefabs | Materiales |
+|---|---|---|---|---|---|---|
+| **Cloth** | — | — | — | — | 1 | 3 |
+| **Dissolve** | — | 1 | — | — | — | — |
+| **MultiTool** | — | 2 | 1 | — | 1 | 2 |
+| **VAT** | — | 3 | — | — | — | — |
+| **VATS** | 2 | — | — | — | 2 | 1 |
+
+**Escenas de demostración:** `Assets/3-Scenes/Main.unity`, `Assets/3-Scenes/Vats.unity`, `Assets/3-Scenes/test.unity`
 
 ## Uso
 
