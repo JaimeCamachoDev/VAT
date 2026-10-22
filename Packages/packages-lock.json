@@ -21,20 +21,6 @@
       "dependencies": {},
       "url": "https://registry.npmjs.org"
     },
-    "com.jaimecamacho.unityfolders": {
-      "version": "1.2.4",
-      "depth": 0,
-      "source": "registry",
-      "dependencies": {},
-      "url": "https://registry.npmjs.org"
-    },
-    "com.jaimecamacho.unitymultitool": {
-      "version": "1.0.2",
-      "depth": 0,
-      "source": "registry",
-      "dependencies": {},
-      "url": "https://registry.npmjs.org"
-    },
     "com.jaimecamachodev.vat": {
       "version": "file:com.jaimecamachodev.vat",
       "depth": 0,
