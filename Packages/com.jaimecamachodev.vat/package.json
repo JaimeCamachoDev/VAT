@@ -1,28 +1,29 @@
 {
   "name": "com.jaimecamachodev.vat",
-  "version": "1.0.0",
+  "version": "1.0.7",
   "displayName": "VAT",
-  "description": "Herramienta para la creacion de VATS",
+  "description": "Herramienta para hornear y reproducir Vertex Animation Textures (VAT) en Unity con shaders de Shader Graph.",
   "unity": "6000.0",
   "unityRelease": "0f1",
   "license": "MIT",
-  "documentationUrl": "https://github.com/JaimeCamachoDev/VAT",
-  "changelogUrl": "https://github.com/JaimeCamachoDev/VAT/releases",
-  "licensesUrl": "https://github.com/JaimeCamachoDev/VAT/blob/main/LICENSE",
-  "keywords": [
-    "unity",
-    "vat",
-    "vertex animation texture",
-    "editor",
-    "animation"
-  ],
   "author": {
     "name": "JaimeCamachoDev",
     "url": "https://github.com/JaimeCamachoDev",
     "email": "jaime.camacho.dev@gmail.com"
   },
   "repository": {
-    "url": "https://github.com/JaimeCamachoDev/VAT.git",
-    "type": "git"
-  }
+    "type": "git",
+    "url": "git+https://github.com/JaimeCamachoDev/VAT.git"
+  },
+  "documentationUrl": "https://github.com/JaimeCamachoDev/VAT#readme",
+  "changelogUrl": "https://github.com/JaimeCamachoDev/VAT/blob/main/Packages/com.jaimecamachodev.vat/CHANGELOG.md",
+  "licensesUrl": "https://github.com/JaimeCamachoDev/VAT/blob/main/LICENSE",
+  "keywords": [
+    "unity",
+    "editor",
+    "vat",
+    "vertex animation texture",
+    "animation",
+    "shadergraph"
+  ]
 }
